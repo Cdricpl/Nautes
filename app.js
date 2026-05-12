@@ -18,6 +18,9 @@ const STORAGE_KEYS = {
   draft: "nautes.draft.v1",
 };
 
+const HF_CHAT_MODEL = "Qwen/Qwen2.5-7B-Instruct:fastest";
+const HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions";
+
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const supportsSpeechRecognition = !!SpeechRecognition;
 
@@ -437,6 +440,17 @@ async function summarizeText(text, templateName) {
       return `⚠ Erreur IA : ${msg}\n\n` + await fakeSummarize(text, templateName);
     }
   }
+
+  if (canUseLocalApi()) {
+    try {
+      setStatus("Analyse IA en cours…");
+      const result = await summarizeWithLocalApi(text, templateName, "");
+      if (result) return result;
+    } catch (error) {
+      console.warn("Local summarization API unavailable:", error);
+    }
+  }
+
   return fakeSummarize(text, templateName);
 }
 
@@ -444,26 +458,30 @@ async function summarizeWithHF(text, templateName, token) {
   const template = TEMPLATES[templateName];
   const instruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
 
-  const system = "Tu es un assistant professionnel spécialisé dans la rédaction de comptes-rendus en français. Sois concis, structuré, utilise des tirets pour les listes.";
-  const inputs =
-    `<|im_start|>system\n${system}<|im_end|>\n` +
-    `<|im_start|>user\n${instruction}\n\nTranscription :\n${text}<|im_end|>\n` +
-    `<|im_start|>assistant\n`;
+  const messages = buildHfMessages(instruction, text);
 
-  const response = await fetch(
-    "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        inputs,
-        parameters: { max_new_tokens: 600, temperature: 0.2, return_full_text: false },
-      }),
+  if (canUseLocalApi()) {
+    try {
+      const proxied = await summarizeWithLocalApi(text, templateName, token);
+      if (proxied) return proxied;
+    } catch (error) {
+      console.warn("Local HF proxy failed, trying direct HF request:", error);
     }
-  );
+  }
+
+  const response = await fetch(HF_CHAT_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: HF_CHAT_MODEL,
+      messages,
+      max_tokens: 600,
+      temperature: 0.2,
+    }),
+  });
 
   if (!response.ok) {
     const err = await response.text();
@@ -471,8 +489,46 @@ async function summarizeWithHF(text, templateName, token) {
   }
 
   const data = await response.json();
-  const generated = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
-  return (generated ?? "").trim();
+  return parseHfChatResponse(data);
+}
+
+function buildHfMessages(instruction, text) {
+  return [
+    {
+      role: "system",
+      content:
+        "Tu es un assistant professionnel specialise dans la redaction de comptes-rendus en francais. Sois concis, structure, utilise des tirets pour les listes.",
+    },
+    {
+      role: "user",
+      content: `${instruction}\n\nTranscription :\n${text}`,
+    },
+  ];
+}
+
+function canUseLocalApi() {
+  return ["localhost", "127.0.0.1"].includes(location.hostname);
+}
+
+async function summarizeWithLocalApi(text, templateName, token) {
+  const response = await fetch("./api/summarize", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, templateName, hfToken: token }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Serveur local ${response.status}: ${err}`);
+  }
+
+  const data = await response.json();
+  if (data.source === "huggingface") return String(data.summary || "").trim();
+  return "";
+}
+
+function parseHfChatResponse(data) {
+  return String(data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "").trim();
 }
 
 async function copyCurrentNote() {

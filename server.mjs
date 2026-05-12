@@ -1,10 +1,12 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
-import { extname, join, normalize } from "node:path";
+import { extname, isAbsolute, relative, resolve } from "node:path";
 
-const root = process.cwd();
+const root = resolve(process.cwd());
 const port = Number(process.env.PORT || 8080);
 const HF_API_TOKEN = process.env.HF_API_TOKEN;
+const HF_CHAT_MODEL = "Qwen/Qwen2.5-7B-Instruct:fastest";
+const HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions";
 
 const types = {
   ".html": "text/html;charset=utf-8",
@@ -57,15 +59,49 @@ function getLocalSummary(text, templateName) {
   ].join("\n");
 }
 
-async function summarizeWithHuggingFace(text) {
-  const modelUrl = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn";
-  const response = await fetch(modelUrl, {
+function getInstruction(templateName) {
+  if (templateName && templateName.startsWith("Social")) {
+    return "Redige une synthese professionnelle : situation, observations, besoins, ressources, decisions, plan d'action et suivi.";
+  }
+
+  if (templateName && templateName.startsWith("SOAP")) {
+    return "Convertis la transcription en note SOAP : subjectif, objectif, analyse et plan.";
+  }
+
+  return "Transforme la transcription en compte-rendu structure : contexte, points cles, decisions, actions et suivi.";
+}
+
+function buildHfMessages(text, templateName) {
+  return [
+    {
+      role: "system",
+      content:
+        "Tu es un assistant professionnel specialise dans la redaction de comptes-rendus en francais. Sois concis, structure, utilise des tirets pour les listes.",
+    },
+    {
+      role: "user",
+      content: `${getInstruction(templateName)}\n\nTranscription :\n${text}`,
+    },
+  ];
+}
+
+function parseHfChatResponse(data) {
+  return String(data?.choices?.[0]?.message?.content || data?.choices?.[0]?.text || "").trim();
+}
+
+async function summarizeWithHuggingFace(text, templateName, token) {
+  const response = await fetch(HF_CHAT_URL, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${HF_API_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ inputs: text, parameters: { max_new_tokens: 200 } }),
+    body: JSON.stringify({
+      model: HF_CHAT_MODEL,
+      messages: buildHfMessages(text, templateName),
+      max_tokens: 600,
+      temperature: 0.2,
+    }),
   });
 
   if (!response.ok) {
@@ -74,12 +110,7 @@ async function summarizeWithHuggingFace(text) {
   }
 
   const data = await response.json();
-  if (Array.isArray(data) && data[0]) {
-    if (typeof data[0] === "string") return data[0];
-    if (typeof data[0].generated_text === "string") return data[0].generated_text;
-  }
-  if (typeof data.summary_text === "string") return data.summary_text;
-  return String(data);
+  return parseHfChatResponse(data);
 }
 
 createServer(async (request, response) => {
@@ -99,6 +130,8 @@ createServer(async (request, response) => {
 
       const text = String(payload.text || "").trim();
       const templateName = String(payload.templateName || "");
+      const requestToken = String(payload.hfToken || "").trim();
+      const hfToken = requestToken || HF_API_TOKEN;
       if (!text) {
         response.writeHead(400, { "content-type": "application/json;charset=utf-8" });
         response.end(JSON.stringify({ error: "Text is required." }));
@@ -107,9 +140,9 @@ createServer(async (request, response) => {
 
       let summary;
       let source = "local";
-      if (HF_API_TOKEN) {
+      if (hfToken) {
         try {
-          summary = await summarizeWithHuggingFace(text);
+          summary = await summarizeWithHuggingFace(text, templateName, hfToken);
           source = "huggingface";
         } catch (error) {
           console.error(error);
@@ -124,10 +157,11 @@ createServer(async (request, response) => {
       return;
     }
 
-    const requestedPath = url.pathname === "/" ? "/index.html" : url.pathname;
-    const filePath = normalize(join(root, requestedPath));
+    const requestedPath = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
+    const filePath = resolve(root, requestedPath);
+    const relativePath = relative(root, filePath);
 
-    if (!filePath.startsWith(root)) {
+    if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
       response.writeHead(403);
       response.end("Forbidden");
       return;

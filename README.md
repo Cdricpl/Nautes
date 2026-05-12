@@ -12,9 +12,7 @@ Application web mobile installable pour prendre des notes de rendez-vous.
 
 ## Tester sur ordinateur
 
-Ouvrir `index.html` dans un navigateur.
-
-Pour que le micro et l'installation PWA fonctionnent correctement, il faut servir le dossier en `https` ou en `localhost`.
+Servez le dossier en `https` ou en `localhost`. C'est necessaire pour le micro, l'installation PWA et le relais local Hugging Face qui evite les erreurs navigateur de type `Failed to fetch`.
 Exemple depuis VS Code :
 
 ```bash
@@ -40,6 +38,7 @@ L'application est déjà statique et prête à être servie comme page GitHub.
 Si vous préférez un déploiement automatique, un workflow GitHub Actions est déjà fourni dans `.github/workflows/pages.yml`.
 
 Les notes sont stockées localement dans le navigateur / l'application mobile. La suppression des données du navigateur ou de l'application supprime aussi l'historique.
+
 ## API de résumé gratuite
 
 L'application peut utiliser un service de résumé réel via l'API Hugging Face si vous fournissez une clé d'API gratuite.
@@ -59,7 +58,10 @@ $env:HF_API_TOKEN = 'your_token_here'
 node server.mjs
 ```
 
-Si vous n'ajoutez pas de token, l'application continue de fonctionner avec un résumé local de secours.
+Vous pouvez aussi saisir le token dans l'onglet Options de l'application. Si l'application tourne via `node server.mjs`, le serveur local relaie l'appel vers Hugging Face et evite les erreurs navigateur de type `Failed to fetch`.
+
+Si vous n'ajoutez pas de token, ou si Hugging Face refuse la requete, l'application continue de fonctionner avec un résumé local de secours.
+
 ## Tester sur smartphone
 
 - Ouvrez l'URL publique GitHub Pages sur votre mobile.
