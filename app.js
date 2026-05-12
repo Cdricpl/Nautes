@@ -18,8 +18,7 @@ const STORAGE_KEYS = {
   draft: "nautes.draft.v1",
 };
 
-const HF_CHAT_MODEL = "Qwen/Qwen2.5-7B-Instruct:fastest";
-const HF_CHAT_URL = "https://router.huggingface.co/v1/chat/completions";
+const HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const supportsSpeechRecognition = !!SpeechRecognition;
@@ -469,17 +468,21 @@ async function summarizeWithHF(text, templateName, token) {
     }
   }
 
-  const response = await fetch(HF_CHAT_URL, {
+  const system = "Tu es un assistant professionnel specialise dans la redaction de comptes-rendus en francais. Sois concis, structure, utilise des tirets pour les listes.";
+  const inputs =
+    `<|im_start|>system\n${system}<|im_end|>\n` +
+    `<|im_start|>user\n${instruction}\n\nTranscription :\n${text}<|im_end|>\n` +
+    `<|im_start|>assistant\n`;
+
+  const response = await fetch(HF_INFERENCE_URL, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: HF_CHAT_MODEL,
-      messages,
-      max_tokens: 600,
-      temperature: 0.2,
+      inputs,
+      parameters: { max_new_tokens: 600, temperature: 0.2, return_full_text: false },
     }),
   });
 
@@ -489,7 +492,8 @@ async function summarizeWithHF(text, templateName, token) {
   }
 
   const data = await response.json();
-  return parseHfChatResponse(data);
+  const generated = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
+  return (generated ?? "").trim();
 }
 
 function buildHfMessages(instruction, text) {
