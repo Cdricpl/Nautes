@@ -40,7 +40,26 @@ L'application est déjà statique et prête à être servie comme page GitHub.
 Si vous préférez un déploiement automatique, un workflow GitHub Actions est déjà fourni dans `.github/workflows/pages.yml`.
 
 Les notes sont stockées localement dans le navigateur / l'application mobile. La suppression des données du navigateur ou de l'application supprime aussi l'historique.
+## API de résumé gratuite
 
+L'application peut utiliser un service de résumé réel via l'API Hugging Face si vous fournissez une clé d'API gratuite.
+
+1. Créez un compte gratuit sur https://huggingface.co/.
+2. Dans votre profil, générez un token d'API.
+3. Lancez le serveur local avec la variable d'environnement `HF_API_TOKEN` :
+
+```bash
+HF_API_TOKEN=your_token_here node server.mjs
+```
+
+Sur Windows PowerShell :
+
+```powershell
+$env:HF_API_TOKEN = 'your_token_here'
+node server.mjs
+```
+
+Si vous n'ajoutez pas de token, l'application continue de fonctionner avec un résumé local de secours.
 ## Tester sur smartphone
 
 - Ouvrez l'URL publique GitHub Pages sur votre mobile.

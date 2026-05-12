@@ -18,6 +18,9 @@ const STORAGE_KEYS = {
   draft: "nautes.draft.v1",
 };
 
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const supportsSpeechRecognition = !!SpeechRecognition;
+
 const state = {
   title: `Rendez-vous - ${new Date().toLocaleDateString("fr-BE")}`,
   templateName: "Social / educatif (synthese)",
@@ -26,11 +29,13 @@ const state = {
   keepAudio: false,
   consent: false,
   storageMode: "offline",
+  useSpeechRecognition: true,
   isRecording: false,
   elapsed: 0,
   transcript: "",
   summary: "",
   mediaRecorder: null,
+  speechRecognition: null,
   chunks: [],
   timer: null,
   startTime: 0,
@@ -44,6 +49,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadDraft();
   fillTemplateSelect();
   bindEvents();
+  checkEnvironment();
   render();
   registerServiceWorker();
 });
@@ -69,6 +75,7 @@ function bindElements() {
     "templateSelect",
     "debugSwitch",
     "keepAudioSwitch",
+    "speechRecognitionSwitch",
     "consentSwitch",
     "storageModeSelect",
     "historyList",
@@ -123,6 +130,10 @@ function bindEvents() {
     state.keepAudio = els.keepAudioSwitch.checked;
     persistSettings();
   });
+  els.speechRecognitionSwitch.addEventListener("change", () => {
+    state.useSpeechRecognition = els.speechRecognitionSwitch.checked;
+    persistSettings();
+  });
   els.consentSwitch.addEventListener("change", () => {
     state.consent = els.consentSwitch.checked;
     persistSettings();
@@ -151,6 +162,10 @@ function bindEvents() {
 }
 
 async function startRecording() {
+  if (state.useSpeechRecognition && supportsSpeechRecognition) {
+    return startSpeechRecognition();
+  }
+
   try {
     state.summary = "";
     setStatus("Demande d'acces micro...");
@@ -176,7 +191,7 @@ async function startRecording() {
       stream.getTracks().forEach((track) => track.stop());
 
       setStatus("Generation IA...");
-      state.summary = await fakeSummarize(state.transcript, state.templateName);
+      state.summary = await summarizeText(state.transcript, state.templateName);
       persistDraft();
       saveCurrentNote({ quiet: true });
       setStatus("Compte-rendu pret");
@@ -192,10 +207,69 @@ async function startRecording() {
     }, 250);
 
     state.isRecording = true;
-    setStatus("Enregistrement...");
+    setStatus("Enregistrement audio...");
     render();
   } catch (error) {
     setStatus(`Erreur micro : ${error?.message || error}`);
+  }
+}
+
+function startSpeechRecognition() {
+  try {
+    state.summary = "";
+    setStatus("Demande d'acces micro et reconnaissance vocale...");
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = false;
+    recognition.lang = state.language;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .slice(event.resultIndex)
+        .map((result) => result[0].transcript)
+        .join(" ");
+
+      state.transcript = state.transcript ? `${state.transcript}\n${transcript}` : transcript;
+      persistDraft();
+      render();
+    };
+
+    recognition.onerror = (event) => {
+      setStatus(`Erreur reconnaissance vocale : ${event.error || event.message || "inconnue"}`);
+      stopSpeechRecognition();
+    };
+
+    recognition.onend = async () => {
+      state.isRecording = false;
+      state.speechRecognition = null;
+      setStatus("Traitement de la transcription...");
+      if (state.transcript.trim()) {
+        state.summary = await summarizeText(state.transcript, state.templateName);
+        persistDraft();
+        saveCurrentNote({ quiet: true });
+        setStatus("Compte-rendu pret");
+      } else {
+        setStatus("Aucune transcription recue.");
+      }
+      render();
+    };
+
+    recognition.start();
+    state.speechRecognition = recognition;
+    state.isRecording = true;
+    state.startTime = Date.now();
+    state.elapsed = 0;
+    state.timer = window.setInterval(() => {
+      state.elapsed = Date.now() - state.startTime;
+      renderTimer();
+    }, 250);
+
+    setStatus("Enregistrement et transcription en cours...");
+    render();
+  } catch (error) {
+    setStatus(`Erreur reconnaissance vocale : ${error?.message || error}`);
   }
 }
 
@@ -206,13 +280,25 @@ function stopRecording() {
     state.elapsed = 0;
     state.isRecording = false;
 
-    if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") {
+    if (state.speechRecognition) {
+      stopSpeechRecognition();
+    } else if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") {
       state.mediaRecorder.stop();
     }
     render();
   } catch (error) {
     setStatus(`Erreur stop : ${error?.message || error}`);
   }
+}
+
+function stopSpeechRecognition() {
+  if (!state.speechRecognition) return;
+  try {
+    state.speechRecognition.stop();
+  } catch {
+    // ignore stop errors
+  }
+  state.speechRecognition = null;
 }
 
 function pickMimeType() {
@@ -224,11 +310,30 @@ function pickMimeType() {
 async function regenerateSummary() {
   if (!state.transcript.trim()) return;
   setStatus("Generation IA...");
-  state.summary = await fakeSummarize(state.transcript, state.templateName);
+  state.summary = await summarizeText(state.transcript, state.templateName);
   persistDraft();
   saveCurrentNote({ quiet: true });
   setStatus("Compte-rendu pret");
   render();
+}
+
+async function summarizeText(text, templateName) {
+  try {
+    const response = await fetch("/api/summarize", {
+      method: "POST",
+      headers: { "content-type": "application/json;charset=utf-8" },
+      body: JSON.stringify({ text, templateName }),
+    });
+
+    if (response.ok) {
+      const payload = await response.json();
+      if (payload?.summary) return payload.summary;
+    }
+  } catch (error) {
+    console.warn("Summarization API failed:", error);
+  }
+
+  return fakeSummarize(text, templateName);
 }
 
 async function copyCurrentNote() {
@@ -266,17 +371,35 @@ function saveCurrentNote(options = {}) {
 }
 
 function downloadCurrentNote() {
-  const text = buildExportText();
-  if (!text.trim()) return;
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const html = buildWordExportHtml();
+  if (!html.trim()) return;
+  const blob = new Blob([html], { type: "application/msword;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `${sanitizeFileName(state.title)}.txt`;
+  anchor.download = `${sanitizeFileName(state.title)}.doc`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
   URL.revokeObjectURL(url);
+}
+
+function buildWordExportHtml() {
+  if (!state.transcript.trim() && !state.summary.trim()) return "";
+  return `<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>${escapeHtml(state.title)}</title>
+  </head>
+  <body>
+    <h1>${escapeHtml(state.title)}</h1>
+    <h2>Transcription</h2>
+    <pre>${escapeHtml(state.transcript)}</pre>
+    <h2>Compte-rendu IA</h2>
+    <pre>${escapeHtml(state.summary || "(non genere)")}</pre>
+  </body>
+</html>`;
 }
 
 async function shareCurrentNote() {
@@ -338,6 +461,7 @@ function render() {
   els.debugSwitch.checked = state.debug;
   els.keepAudioSwitch.checked = state.keepAudio;
   els.keepAudioSwitch.disabled = !state.debug;
+  els.speechRecognitionSwitch.checked = state.useSpeechRecognition;
   els.consentSwitch.checked = state.consent;
   els.storageModeSelect.value = state.storageMode;
 
@@ -389,6 +513,36 @@ function activateTab(name) {
   });
 }
 
+function checkEnvironment() {
+  const fileProtocol = location.protocol === "file:";
+  const noMicro = !navigator.mediaDevices?.getUserMedia;
+
+  if (fileProtocol) {
+    setStatus("Ouvrez l'application via http://localhost ou un serveur local pour activer le micro.");
+    els.recordButton.disabled = true;
+    els.speechRecognitionSwitch.disabled = true;
+    return;
+  }
+
+  if (noMicro) {
+    setStatus("Micro indisponible dans ce navigateur.");
+    els.recordButton.disabled = true;
+    els.speechRecognitionSwitch.disabled = true;
+    return;
+  }
+
+  if (!supportsSpeechRecognition) {
+    els.speechRecognitionSwitch.disabled = true;
+    if (state.useSpeechRecognition) {
+      state.useSpeechRecognition = false;
+      persistSettings();
+    }
+    setStatus("Reconnaissance vocale gratuite indisponible dans ce navigateur. L'enregistrement audio reste utilisable.");
+  }
+
+  els.recordButton.disabled = false;
+}
+
 function toggleSettings(open) {
   els.settingsPanel.hidden = !open;
 }
@@ -413,6 +567,7 @@ function persistSettings() {
     language: state.language,
     debug: state.debug,
     keepAudio: state.keepAudio,
+    useSpeechRecognition: state.useSpeechRecognition,
     consent: state.consent,
     storageMode: state.storageMode,
   };

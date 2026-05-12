@@ -106,6 +106,14 @@
 
             <label class="switch-row">
               <span>
+                <strong>Reconnaissance vocale gratuite</strong>
+                <small>Utilise la reconnaissance vocale du navigateur quand elle est disponible.</small>
+              </span>
+              <input id="speechRecognitionSwitch" type="checkbox" />
+            </label>
+
+            <label class="switch-row">
+              <span>
                 <strong>Consentement</strong>
                 <small>Trace locale pour confirmer que l'enregistrement est autorise.</small>
               </span>
@@ -128,14 +136,15 @@
           </section>
 
           <section class="tab-panel" data-panel="export">
-            <button id="downloadButton" class="secondary-button full" type="button">Telecharger .txt</button>
+            <button id="downloadButton" class="secondary-button full" type="button">Telecharger Word (.doc)</button>
             <button id="shareButton" class="secondary-button full ghost" type="button">Partager</button>
             <button id="clearButton" class="secondary-button full danger" type="button">Effacer la note courante</button>
 
             <div class="backend-note">
-              <p><strong>A brancher plus tard</strong></p>
-              <p>/api/transcribe recevra l'audio temporaire et renverra le texte.</p>
-              <p>/api/summarize recevra transcription + template et renverra le compte-rendu.</p>
+              <p><strong>API de résumé</strong></p>
+              <p>Le serveur local fournit désormais `/api/summarize` pour un résumé IA réel.</p>
+              <p>Si vous utilisez un token Hugging Face gratuit dans `server.mjs`, la synthèse sera confiée à l'API.</p>
+              <p>Sans token, l'application utilise un résumé local de secours.</p>
             </div>
           </section>
         </div>
