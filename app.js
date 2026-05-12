@@ -246,51 +246,7 @@ async function startRecording() {
 function startSpeechRecognition() {
   try {
     state.summary = "";
-    setStatus("Demande d'acces micro et reconnaissance vocale...");
-
-    const recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = false;
-    recognition.lang = state.language;
-    recognition.maxAlternatives = 1;
-
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results)
-        .slice(event.resultIndex)
-        .map((result) => result[0].transcript)
-        .join(" ");
-
-      state.transcript = state.transcript ? `${state.transcript}\n${transcript}` : transcript;
-      persistDraft();
-      render();
-    };
-
-    recognition.onerror = (event) => {
-      state.recognitionError = event.error || event.message || "inconnue";
-      setStatus(`Erreur reconnaissance vocale : ${state.recognitionError}`);
-      stopSpeechRecognition();
-    };
-
-    recognition.onend = async () => {
-      finishSpeechRecognitionSession();
-
-      if (state.recognitionError && !state.transcript.trim()) {
-        setStatus(`Erreur reconnaissance vocale : ${state.recognitionError}`);
-      } else if (state.transcript.trim()) {
-        setStatus("Traitement de la transcription...");
-        state.summary = await summarizeText(state.transcript, state.templateName);
-        persistDraft();
-        saveCurrentNote({ quiet: true });
-        setStatus("Compte-rendu pret");
-      } else {
-        setStatus("Aucune transcription recue.");
-      }
-      render();
-    };
-
-    recognition.start();
     state.recognitionError = "";
-    state.speechRecognition = recognition;
     state.isRecording = true;
     startBackgroundKeepAlive();
     state.startTime = Date.now();
@@ -299,12 +255,66 @@ function startSpeechRecognition() {
       state.elapsed = Date.now() - state.startTime;
       renderTimer();
     }, 250);
-
+    spawnRecognition();
     setStatus("Enregistrement et transcription en cours...");
     render();
   } catch (error) {
     setStatus(`Erreur reconnaissance vocale : ${error?.message || error}`);
   }
+}
+
+function spawnRecognition() {
+  const recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.lang = state.language;
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (event) => {
+    const transcript = Array.from(event.results)
+      .slice(event.resultIndex)
+      .map((result) => result[0].transcript)
+      .join(" ");
+    state.transcript = state.transcript ? `${state.transcript}\n${transcript}` : transcript;
+    persistDraft();
+    render();
+  };
+
+  recognition.onerror = (event) => {
+    if (event.error === "no-speech") return;
+    state.recognitionError = event.error || "inconnue";
+  };
+
+  recognition.onend = async () => {
+    state.speechRecognition = null;
+
+    // Silence ou pause — relancer tant que l'utilisateur n'a pas cliqué Stop
+    if (state.isRecording && !state.recognitionError) {
+      spawnRecognition();
+      return;
+    }
+
+    // Erreur fatale pendant l'enregistrement — nettoyer
+    if (state.isRecording) {
+      finishSpeechRecognitionSession();
+    }
+
+    if (state.recognitionError) {
+      setStatus(`Erreur reconnaissance vocale : ${state.recognitionError}`);
+    } else if (state.transcript.trim()) {
+      setStatus("Traitement de la transcription...");
+      state.summary = await summarizeText(state.transcript, state.templateName);
+      persistDraft();
+      saveCurrentNote({ quiet: true });
+      setStatus("Compte-rendu pret");
+    } else {
+      setStatus("Aucune transcription recue.");
+    }
+    render();
+  };
+
+  recognition.start();
+  state.speechRecognition = recognition;
 }
 
 function stopRecording() {
