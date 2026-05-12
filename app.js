@@ -211,7 +211,7 @@ async function startRecording() {
     recorder.onstop = async () => {
       setStatus("Transcription...");
       const blob = new Blob(state.chunks, { type: recorder.mimeType || "audio/webm" });
-      const text = await fakeTranscribe(blob, state.language);
+      const text = await transcribeAudio(blob, state.language);
       state.transcript = state.transcript ? `${state.transcript}\n${text}` : text;
 
       if (!state.keepAudio) state.chunks = [];
@@ -776,17 +776,42 @@ function escapeHtml(value) {
   });
 }
 
-async function fakeTranscribe(blob, language) {
-  await sleep(650);
-  const kb = Math.max(1, Math.round(blob.size / 1024));
-  const samples = [
-    "Bonjour, on fait un point sur la situation et les etapes suivantes.",
-    "La famille exprime des difficultes sur l'organisation et la communication.",
-    "Decision : planifier un suivi dans deux semaines et clarifier les responsabilites.",
-    "Action : envoyer la liste des documents necessaires et fixer le prochain rendez-vous.",
-  ];
-  const pick = samples[Math.floor(Math.random() * samples.length)];
-  return `(${language}, ~${kb}KB) ${pick}`;
+async function transcribeAudio(blob, language) {
+  if (state.hfToken) {
+    try {
+      setStatus("Transcription Whisper en cours…");
+      return await transcribeWithWhisper(blob, language);
+    } catch (error) {
+      console.warn("Whisper failed:", error);
+      setStatus("Transcription IA échouée, vérifiez votre token.");
+    }
+  } else {
+    setStatus("Aucun token HF : activez la reconnaissance vocale dans les paramètres.");
+  }
+  return "";
+}
+
+async function transcribeWithWhisper(blob, language) {
+  const langCode = language.split("-")[0];
+  const response = await fetch(
+    "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${state.hfToken}`,
+        "Content-Type": blob.type || "audio/webm",
+      },
+      body: blob,
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Whisper ${response.status}: ${err}`);
+  }
+
+  const data = await response.json();
+  return (data.text ?? "").trim();
 }
 
 async function fakeSummarize(text, templateName) {
