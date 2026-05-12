@@ -35,6 +35,7 @@ const state = {
   audioCtx: null,
   updateReady: false,
   isRecording: false,
+  recognitionError: "",
   elapsed: 0,
   transcript: "",
   summary: "",
@@ -265,15 +266,18 @@ function startSpeechRecognition() {
     };
 
     recognition.onerror = (event) => {
-      setStatus(`Erreur reconnaissance vocale : ${event.error || event.message || "inconnue"}`);
+      state.recognitionError = event.error || event.message || "inconnue";
+      setStatus(`Erreur reconnaissance vocale : ${state.recognitionError}`);
       stopSpeechRecognition();
     };
 
     recognition.onend = async () => {
-      state.isRecording = false;
-      state.speechRecognition = null;
-      setStatus("Traitement de la transcription...");
-      if (state.transcript.trim()) {
+      finishSpeechRecognitionSession();
+
+      if (state.recognitionError && !state.transcript.trim()) {
+        setStatus(`Erreur reconnaissance vocale : ${state.recognitionError}`);
+      } else if (state.transcript.trim()) {
+        setStatus("Traitement de la transcription...");
         state.summary = await summarizeText(state.transcript, state.templateName);
         persistDraft();
         saveCurrentNote({ quiet: true });
@@ -285,6 +289,7 @@ function startSpeechRecognition() {
     };
 
     recognition.start();
+    state.recognitionError = "";
     state.speechRecognition = recognition;
     state.isRecording = true;
     startBackgroundKeepAlive();
@@ -329,6 +334,15 @@ function stopSpeechRecognition() {
     // ignore stop errors
   }
   state.speechRecognition = null;
+}
+
+function finishSpeechRecognitionSession() {
+  window.clearInterval(state.timer);
+  state.timer = null;
+  state.elapsed = 0;
+  state.isRecording = false;
+  state.speechRecognition = null;
+  stopBackgroundKeepAlive();
 }
 
 function startBackgroundKeepAlive() {
@@ -403,10 +417,12 @@ async function summarizeText(text, templateName) {
   if (state.hfToken) {
     try {
       setStatus("Analyse IA en cours…");
-      return await summarizeWithHF(text, templateName, state.hfToken);
+      const result = await summarizeWithHF(text, templateName, state.hfToken);
+      if (result) return result;
+      throw new Error("Réponse vide");
     } catch (error) {
-      console.warn("HF API failed, using local fallback:", error);
-      setStatus("IA indisponible, résumé local utilisé.");
+      console.warn("HF summarization failed:", error);
+      setStatus(`IA : ${error.message ?? "erreur"} — résumé local utilisé.`);
     }
   }
   return fakeSummarize(text, templateName);
@@ -416,8 +432,13 @@ async function summarizeWithHF(text, templateName, token) {
   const template = TEMPLATES[templateName];
   const instruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
 
+  const prompt =
+    `<s>[INST] Tu es un assistant professionnel spécialisé dans la rédaction de comptes-rendus en français. ` +
+    `Sois concis, structuré, utilise des tirets pour les listes.\n\n` +
+    `${instruction}\n\nTranscription :\n${text} [/INST]`;
+
   const response = await fetch(
-    "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3/v1/chat/completions",
+    "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
     {
       method: "POST",
       headers: {
@@ -425,20 +446,8 @@ async function summarizeWithHF(text, templateName, token) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "mistralai/Mistral-7B-Instruct-v0.3",
-        messages: [
-          {
-            role: "system",
-            content:
-              "Tu es un assistant professionnel spécialisé dans la rédaction de comptes-rendus en français. Sois concis, structuré et utilise des tirets pour les listes.",
-          },
-          {
-            role: "user",
-            content: `${instruction}\n\nTranscription :\n${text}`,
-          },
-        ],
-        max_tokens: 600,
-        temperature: 0.2,
+        inputs: prompt,
+        parameters: { max_new_tokens: 600, temperature: 0.2, return_full_text: false },
       }),
     }
   );
@@ -449,7 +458,8 @@ async function summarizeWithHF(text, templateName, token) {
   }
 
   const data = await response.json();
-  return data.choices?.[0]?.message?.content ?? "";
+  const generated = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
+  return (generated ?? "").trim();
 }
 
 async function copyCurrentNote() {
