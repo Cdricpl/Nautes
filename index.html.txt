@@ -1,0 +1,437 @@
+import React, { useEffect, useRef, useState } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Download, Info, Mic, Settings, ShieldCheck, Square, Trash2, Wand2 } from "lucide-react";
+
+/**
+ * Prototype UI (web) d'une app mobile "rendez-vous" :
+ * - Accueil minimaliste avec un seul bouton de capture
+ * - (Stub) Transcription automatique après Stop
+ * - (Stub) IA automatique après transcription
+ * - Politique : ne pas conserver l'audio par défaut
+ *
+ * Pour une vraie app GSM : React Native (Expo) + backend (Azure Functions / API) pour STT + LLM.
+ */
+
+const TEMPLATES = {
+  "Compte-rendu (simple)": {
+    system: "Tu es un assistant de rédaction de compte-rendu. Tu produis un texte clair, neutre, factuel.",
+    user:
+      "Transforme la transcription en compte-rendu structuré :\n- Contexte\n- Points clés\n- Décisions\n- Actions (qui / quoi / quand)\n- Suivi\n\nReste fidèle au contenu et n'invente rien. Signale les zones incertaines.",
+  },
+  "Social / éducatif (synthèse)": {
+    system:
+      "Tu es un assistant pour un travailleur social/éducateur spécialisé. Style : professionnel, concis, respectueux.",
+    user:
+      "À partir de la transcription, rédige une synthèse structurée :\n1) Situation / contexte\n2) Observations\n3) Besoins / difficultés\n4) Ressources / points d'appui\n5) Décisions / accords\n6) Plan d'action (actions, responsables, échéances)\n7) Points à vérifier au prochain contact\n\nN'ajoute aucune donnée non dite. Si un point est flou, note 'à préciser'.",
+  },
+  "SOAP (santé/psy)": {
+    system:
+      "Tu es un assistant de rédaction clinique. Tu produis une note SOAP neutre et factuelle.",
+    user:
+      "Convertis la transcription en note SOAP :\nS (subjectif)\nO (objectif)\nA (analyse)\nP (plan)\n\nNe devine pas. Indique les incertitudes.",
+  },
+};
+
+function formatDuration(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, "0")}`;
+}
+
+export default function VoiceNotesPrototype() {
+  const [title, setTitle] = useState("Rendez-vous - " + new Date().toLocaleDateString());
+  const [templateName, setTemplateName] = useState("Social / éducatif (synthèse)");
+  const [language, setLanguage] = useState("fr-FR");
+  const [keepAudio, setKeepAudio] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [transcript, setTranscript] = useState("");
+  const [structured, setStructured] = useState("");
+  const [status, setStatus] = useState("Prêt");
+  const [debug, setDebug] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+
+  const recorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const startTsRef = useRef(0);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.stop();
+      }
+    };
+  }, []);
+
+  async function startRecording() {
+    try {
+      setStructured("");
+      setStatus("Demande d'accès micro...");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+      recorderRef.current = recorder;
+      chunksRef.current = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      recorder.onstop = async () => {
+        // L'audio reste uniquement en mémoire le temps de la transcription.
+        setStatus("Transcription...");
+        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+
+        const fake = await fakeTranscribe(blob, language);
+        const nextTranscript = transcript ? transcript + "\n" + fake : fake;
+        setTranscript(nextTranscript);
+
+        if (!keepAudio) {
+          chunksRef.current = [];
+        }
+
+        stream.getTracks().forEach((t) => t.stop());
+        setStatus("Génération IA...");
+
+        const output = await fakeSummarize(nextTranscript, templateName);
+        setStructured(output);
+        setStatus(keepAudio ? "Compte-rendu prêt (audio conservé en mémoire - mode debug)" : "Compte-rendu prêt");
+      };
+
+      recorder.start(250);
+      startTsRef.current = Date.now();
+      timerRef.current = setInterval(() => {
+        setElapsed(Date.now() - startTsRef.current);
+      }, 250);
+
+      setIsRecording(true);
+      setStatus("Enregistrement...");
+    } catch (e) {
+      setStatus("Erreur micro : " + (e?.message || String(e)));
+    }
+  }
+
+  async function stopRecording() {
+    try {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      setIsRecording(false);
+      setElapsed(0);
+      if (recorderRef.current && recorderRef.current.state !== "inactive") {
+        recorderRef.current.stop();
+      }
+    } catch (e) {
+      setStatus("Erreur stop : " + (e?.message || String(e)));
+    }
+  }
+
+  async function runAI() {
+    setStatus("Génération IA...");
+
+    // Dans l'app finale : envoyer {transcript, template} au backend LLM.
+    const output = await fakeSummarize(transcript, templateName);
+    setStructured(output);
+    setStatus("Compte-rendu prêt");
+  }
+
+  function clearAll() {
+    setTranscript("");
+    setStructured("");
+    setStatus("Réinitialisé");
+    chunksRef.current = [];
+  }
+
+  function downloadTxt() {
+    const content = `# ${title}\n\n## Transcription\n${transcript}\n\n---\n\n## Compte-rendu IA\n${structured || "(non généré)"}\n`;
+    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${title.replace(/[^a-zA-Z0-9-_ ]/g, "").slice(0, 60) || "note"}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  const hasResult = transcript.trim() || structured.trim();
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="mx-auto flex min-h-[calc(100vh-2rem)] max-w-5xl flex-col gap-4 md:min-h-[calc(100vh-4rem)]">
+        <header className="flex items-center justify-between">
+          <h1 className="text-xl font-semibold tracking-tight text-slate-950">Nautes</h1>
+          <Button
+            variant={showSettings ? "secondary" : "ghost"}
+            size="icon"
+            className="rounded-full"
+            onClick={() => setShowSettings((v) => !v)}
+            aria-label="Paramètres"
+          >
+            <Settings className="h-5 w-5" />
+          </Button>
+        </header>
+
+        <main className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
+          <Button
+            onClick={isRecording ? stopRecording : startRecording}
+            variant={isRecording ? "destructive" : "default"}
+            className="h-44 w-44 rounded-full text-2xl font-semibold shadow-lg md:h-56 md:w-56 md:text-3xl"
+          >
+            <span className="flex flex-col items-center gap-3">
+              {isRecording ? <Square className="h-10 w-10" /> : <Mic className="h-10 w-10" />}
+              {isRecording ? "Stop" : "Démarrer"}
+            </span>
+          </Button>
+
+          <div className="min-h-[3.5rem] space-y-2">
+            {isRecording && <Badge variant="secondary" className="text-base">{formatDuration(elapsed)}</Badge>}
+            <p className="text-sm text-slate-600">
+              Statut : <span className="font-medium text-slate-950">{status}</span>
+            </p>
+          </div>
+        </main>
+
+        {hasResult && (
+          <section className="space-y-3">
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <Card className="rounded-xl shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Transcription</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <Textarea
+                    value={transcript}
+                    onChange={(e) => setTranscript(e.target.value)}
+                    placeholder="La transcription apparaîtra ici..."
+                    className="min-h-[180px] rounded-xl"
+                  />
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-xl shadow-sm">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Compte-rendu IA</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <Textarea
+                    value={structured}
+                    onChange={(e) => setStructured(e.target.value)}
+                    placeholder="Le compte-rendu apparaîtra ici..."
+                    className="min-h-[180px] rounded-xl"
+                  />
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="secondary" className="gap-2 rounded-xl" onClick={runAI} disabled={!transcript.trim()}>
+                      <Wand2 className="h-4 w-4" /> Régénérer
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="rounded-xl"
+                      onClick={() => navigator.clipboard.writeText(structured || transcript || "")}
+                      disabled={!hasResult}
+                    >
+                      Copier
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </section>
+        )}
+
+        {showSettings && (
+          <Card className="rounded-xl shadow-sm">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">Paramètres</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Tabs defaultValue="session" className="w-full">
+                <TabsList className="grid w-full grid-cols-4 rounded-xl">
+                  <TabsTrigger value="session">Session</TabsTrigger>
+                  <TabsTrigger value="options">Options</TabsTrigger>
+                  <TabsTrigger value="export">Export</TabsTrigger>
+                  <TabsTrigger value="tech">Avancé</TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="session" className="mt-4 space-y-4">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <div className="space-y-2 md:col-span-2">
+                      <Label>Titre</Label>
+                      <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ex: RDV famille - 12/05" />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Langue</Label>
+                      <Select value={language} onValueChange={setLanguage}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fr-FR">Français (fr-FR)</SelectItem>
+                          <SelectItem value="fr-BE">Français (fr-BE)</SelectItem>
+                          <SelectItem value="en-US">English (en-US)</SelectItem>
+                          <SelectItem value="nl-BE">Nederlands (nl-BE)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Modèle de compte-rendu</Label>
+                    <Select value={templateName} onValueChange={setTemplateName}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {Object.keys(TEMPLATES).map((k) => (
+                          <SelectItem key={k} value={k}>{k}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="options" className="mt-4 space-y-3">
+                  <div className="flex items-center justify-between rounded-xl border p-3">
+                    <div className="space-y-0.5">
+                      <Label>Mode debug</Label>
+                      <p className="text-xs text-slate-500">Permet de conserver l'audio en mémoire pour les tests.</p>
+                    </div>
+                    <Switch checked={debug} onCheckedChange={(v) => { setDebug(v); if (!v) setKeepAudio(false); }} />
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border p-3">
+                    <div className="space-y-0.5">
+                      <Label>Conserver l'audio</Label>
+                      <p className="text-xs text-slate-500">Par défaut: non. L'audio est effacé après transcription.</p>
+                    </div>
+                    <Switch disabled={!debug} checked={keepAudio} onCheckedChange={setKeepAudio} />
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border p-3">
+                    <div className="space-y-0.5">
+                      <Label>Mode offline/cloud</Label>
+                      <p className="text-xs text-slate-500">Emplacement réservé pour choisir le traitement local ou backend.</p>
+                    </div>
+                    <Badge variant="outline">Cloud</Badge>
+                  </div>
+                  <div className="flex items-center justify-between rounded-xl border p-3">
+                    <div className="space-y-0.5">
+                      <Label>Consentement</Label>
+                      <p className="text-xs text-slate-500">Option à brancher avant la capture dans l'app finale.</p>
+                    </div>
+                    <Switch />
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="export" className="mt-4 space-y-4">
+                  <div className="flex flex-wrap gap-2">
+                    <Button className="gap-2 rounded-xl" onClick={downloadTxt} disabled={!hasResult}>
+                      <Download className="h-4 w-4" /> Télécharger .txt
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="rounded-xl"
+                      onClick={() => navigator.clipboard.writeText(structured || transcript || "")}
+                      disabled={!hasResult}
+                    >
+                      Copier dans le presse-papiers
+                    </Button>
+                    <Button variant="ghost" className="gap-2 rounded-xl" onClick={clearAll}>
+                      <Trash2 className="h-4 w-4" /> Effacer
+                    </Button>
+                  </div>
+                  <Separator />
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-slate-700">Historique et intégrations</p>
+                    <ul className="list-disc space-y-1 pl-5 text-sm text-slate-600">
+                      <li>Historique des notes à brancher sur stockage local chiffré.</li>
+                      <li>Envoi vers OneNote, Word ou dossier sécurisé.</li>
+                      <li>Synchronisation optionnelle selon le mode choisi.</li>
+                    </ul>
+                  </div>
+                </TabsContent>
+
+                <TabsContent value="tech" className="mt-4">
+                  <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                    <div className="rounded-xl border p-3">
+                      <p className="font-medium">/api/transcribe</p>
+                      <p className="mt-1 text-slate-600">Reçoit un fichier audio temporaire, renvoie le texte et efface l'audio après traitement.</p>
+                    </div>
+                    <div className="rounded-xl border p-3">
+                      <p className="font-medium">/api/summarize</p>
+                      <p className="mt-1 text-slate-600">Reçoit transcription + template, renvoie un compte-rendu structuré.</p>
+                    </div>
+                    <div className="rounded-xl border p-3 md:col-span-2">
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="secondary" className="gap-1"><ShieldCheck className="h-3.5 w-3.5" />Audio non conservé par défaut</Badge>
+                        <Badge variant="outline" className="gap-1"><Info className="h-3.5 w-3.5" />Démo web à porter sur GSM</Badge>
+                      </div>
+                    </div>
+                  </div>
+                </TabsContent>
+              </Tabs>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+async function fakeTranscribe(blob, language) {
+  await new Promise((r) => setTimeout(r, 650));
+  const kb = Math.max(1, Math.round(blob.size / 1024));
+  const samples = [
+    "Bonjour, on fait un point sur la situation et les étapes suivantes.",
+    "La famille exprime des difficultés sur l'organisation et la communication.",
+    "Décision : planifier un suivi dans deux semaines et clarifier les responsabilités.",
+    "Action : envoyer la liste des documents nécessaires et fixer le prochain rendez-vous.",
+  ];
+  const pick = samples[Math.floor(Math.random() * samples.length)];
+  return `(${language}, ~${kb}KB) ${pick}`;
+}
+
+async function fakeSummarize(text, templateName) {
+  await new Promise((r) => setTimeout(r, 700));
+  if (!text.trim()) return "";
+  const lines = text.split(/\n+/).filter(Boolean);
+  const key = lines.slice(-4).join(" ");
+
+  if (templateName.startsWith("Social")) {
+    return [
+      "1) Situation / contexte\n- Rendez-vous de suivi.\n",
+      "2) Observations\n- " + key + "\n",
+      "3) Besoins / difficultés\n- À préciser : éléments concrets, priorités, contraintes.\n",
+      "4) Ressources / points d'appui\n- Points positifs mentionnés : à préciser.\n",
+      "5) Décisions / accords\n- Accord sur un plan d'action et un prochain contact.\n",
+      "6) Plan d'action\n- Action 1 : (responsable) - (échéance)\n- Action 2 : (responsable) - (échéance)\n",
+      "7) Prochain suivi\n- À vérifier : évolution, documents, points en suspens.\n",
+    ].join("\n");
+  }
+
+  if (templateName.startsWith("SOAP")) {
+    return [
+      "S (Subjectif)\n- " + key + "\n",
+      "O (Objectif)\n- Observations factuelles à compléter.\n",
+      "A (Analyse)\n- Hypothèses/priorités : à préciser.\n",
+      "P (Plan)\n- Prochaines étapes : fixer échéances, responsabilités.\n",
+    ].join("\n");
+  }
+
+  return [
+    "Contexte\n- Rendez-vous de suivi.\n",
+    "Points clés\n- " + key + "\n",
+    "Décisions\n- À préciser.\n",
+    "Actions\n- Action 1 : (qui/quoi/quand)\n- Action 2 : (qui/quoi/quand)\n",
+    "Suivi\n- Prochain rendez-vous : à planifier.\n",
+  ].join("\n");
+}

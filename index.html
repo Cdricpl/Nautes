@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Nautes" />
+    <title>Nautes</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Nautes</p>
+          <h1>Notes rendez-vous</h1>
+        </div>
+        <button id="settingsButton" class="icon-button" type="button" aria-label="Parametres">
+          <span aria-hidden="true">⚙</span>
+        </button>
+      </header>
+
+      <main class="main-screen" aria-live="polite">
+        <button id="recordButton" class="record-button" type="button">
+          <span id="recordIcon" class="record-icon" aria-hidden="true"></span>
+          <span id="recordLabel">Demarrer</span>
+        </button>
+
+        <section class="status-panel">
+          <p id="timer" class="timer" hidden>0:00</p>
+          <p id="statusText">Pret</p>
+        </section>
+      </main>
+
+      <section id="resultPanel" class="result-panel" hidden>
+        <div class="result-header">
+          <h2>Resultat</h2>
+          <button id="saveCurrentButton" class="quiet-button" type="button">Sauver</button>
+        </div>
+
+        <label class="field-label" for="transcriptText">Transcription</label>
+        <textarea id="transcriptText" class="text-area" placeholder="La transcription apparaitra ici..."></textarea>
+
+        <label class="field-label" for="summaryText">Compte-rendu IA</label>
+        <textarea id="summaryText" class="text-area tall" placeholder="Le compte-rendu apparaitra ici..."></textarea>
+
+        <div class="secondary-actions">
+          <button id="regenerateButton" class="secondary-button" type="button">Regenerer</button>
+          <button id="copyButton" class="secondary-button ghost" type="button">Copier</button>
+        </div>
+      </section>
+
+      <aside id="settingsPanel" class="settings-panel" hidden>
+        <div class="settings-card">
+          <div class="settings-header">
+            <h2>Parametres</h2>
+            <button id="closeSettingsButton" class="icon-button" type="button" aria-label="Fermer">
+              <span aria-hidden="true">×</span>
+            </button>
+          </div>
+
+          <nav class="settings-tabs" aria-label="Sections des parametres">
+            <button class="tab-button active" type="button" data-tab="session">Session</button>
+            <button class="tab-button" type="button" data-tab="options">Options</button>
+            <button class="tab-button" type="button" data-tab="history">Notes</button>
+            <button class="tab-button" type="button" data-tab="export">Export</button>
+          </nav>
+
+          <section class="tab-panel active" data-panel="session">
+            <label class="field-label" for="titleInput">Titre</label>
+            <input id="titleInput" class="text-input" type="text" />
+
+            <label class="field-label" for="languageSelect">Langue</label>
+            <select id="languageSelect" class="select-input">
+              <option value="fr-FR">Francais (fr-FR)</option>
+              <option value="fr-BE">Francais (fr-BE)</option>
+              <option value="en-US">English (en-US)</option>
+              <option value="nl-BE">Nederlands (nl-BE)</option>
+            </select>
+
+            <label class="field-label" for="templateSelect">Modele de compte-rendu</label>
+            <select id="templateSelect" class="select-input"></select>
+          </section>
+
+          <section class="tab-panel" data-panel="options">
+            <label class="switch-row">
+              <span>
+                <strong>Mode debug</strong>
+                <small>Autorise la conservation temporaire de l'audio en memoire.</small>
+              </span>
+              <input id="debugSwitch" type="checkbox" />
+            </label>
+
+            <label class="switch-row">
+              <span>
+                <strong>Conserver l'audio</strong>
+                <small>Desactive par defaut: l'audio est efface apres transcription.</small>
+              </span>
+              <input id="keepAudioSwitch" type="checkbox" disabled />
+            </label>
+
+            <label class="switch-row">
+              <span>
+                <strong>Consentement</strong>
+                <small>Trace locale pour confirmer que l'enregistrement est autorise.</small>
+              </span>
+              <input id="consentSwitch" type="checkbox" />
+            </label>
+
+            <label class="field-label" for="storageModeSelect">Mode offline/cloud</label>
+            <select id="storageModeSelect" class="select-input">
+              <option value="offline">Offline - memoire du telephone</option>
+              <option value="cloud">Cloud - a brancher plus tard</option>
+            </select>
+          </section>
+
+          <section class="tab-panel" data-panel="history">
+            <div class="history-header">
+              <h3>Historique local</h3>
+              <button id="clearHistoryButton" class="quiet-button danger" type="button">Vider</button>
+            </div>
+            <div id="historyList" class="history-list"></div>
+          </section>
+
+          <section class="tab-panel" data-panel="export">
+            <button id="downloadButton" class="secondary-button full" type="button">Telecharger .txt</button>
+            <button id="shareButton" class="secondary-button full ghost" type="button">Partager</button>
+            <button id="clearButton" class="secondary-button full danger" type="button">Effacer la note courante</button>
+
+            <div class="backend-note">
+              <p><strong>A brancher plus tard</strong></p>
+              <p>/api/transcribe recevra l'audio temporaire et renverra le texte.</p>
+              <p>/api/summarize recevra transcription + template et renverra le compte-rendu.</p>
+            </div>
+          </section>
+        </div>
+      </aside>
+    </div>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>
