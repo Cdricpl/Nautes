@@ -444,8 +444,14 @@ async function summarizeWithHF(text, templateName, token) {
   const template = TEMPLATES[templateName];
   const instruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
 
+  const system = "Tu es un assistant professionnel spécialisé dans la rédaction de comptes-rendus en français. Sois concis, structuré, utilise des tirets pour les listes.";
+  const inputs =
+    `<|im_start|>system\n${system}<|im_end|>\n` +
+    `<|im_start|>user\n${instruction}\n\nTranscription :\n${text}<|im_end|>\n` +
+    `<|im_start|>assistant\n`;
+
   const response = await fetch(
-    "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions",
+    "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct",
     {
       method: "POST",
       headers: {
@@ -453,18 +459,8 @@ async function summarizeWithHF(text, templateName, token) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        messages: [
-          {
-            role: "system",
-            content: "Tu es un assistant professionnel spécialisé dans la rédaction de comptes-rendus en français. Sois concis, structuré, utilise des tirets pour les listes.",
-          },
-          {
-            role: "user",
-            content: `${instruction}\n\nTranscription :\n${text}`,
-          },
-        ],
-        max_tokens: 600,
-        temperature: 0.2,
+        inputs,
+        parameters: { max_new_tokens: 600, temperature: 0.2, return_full_text: false },
       }),
     }
   );
@@ -475,7 +471,8 @@ async function summarizeWithHF(text, templateName, token) {
   }
 
   const data = await response.json();
-  return (data.choices?.[0]?.message?.content ?? "").trim();
+  const generated = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
+  return (generated ?? "").trim();
 }
 
 async function copyCurrentNote() {
