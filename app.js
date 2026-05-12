@@ -31,6 +31,8 @@ const state = {
   storageMode: "offline",
   useSpeechRecognition: true,
   hfToken: "",
+  wakeLock: null,
+  audioCtx: null,
   updateReady: false,
   isRecording: false,
   elapsed: 0,
@@ -46,6 +48,14 @@ const state = {
 const els = {};
 let waitingServiceWorker = null;
 let refreshingServiceWorker = false;
+
+document.addEventListener("visibilitychange", () => {
+  if (state.isRecording && document.visibilityState === "visible" && "wakeLock" in navigator) {
+    navigator.wakeLock.request("screen")
+      .then((lock) => { state.wakeLock = lock; })
+      .catch(() => {});
+  }
+});
 
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
@@ -224,6 +234,7 @@ async function startRecording() {
     }, 250);
 
     state.isRecording = true;
+    startBackgroundKeepAlive();
     setStatus("Enregistrement audio...");
     render();
   } catch (error) {
@@ -276,6 +287,7 @@ function startSpeechRecognition() {
     recognition.start();
     state.speechRecognition = recognition;
     state.isRecording = true;
+    startBackgroundKeepAlive();
     state.startTime = Date.now();
     state.elapsed = 0;
     state.timer = window.setInterval(() => {
@@ -297,6 +309,7 @@ function stopRecording() {
     state.elapsed = 0;
     state.isRecording = false;
 
+    stopBackgroundKeepAlive();
     if (state.speechRecognition) {
       stopSpeechRecognition();
     } else if (state.mediaRecorder && state.mediaRecorder.state !== "inactive") {
@@ -316,6 +329,58 @@ function stopSpeechRecognition() {
     // ignore stop errors
   }
   state.speechRecognition = null;
+}
+
+function startBackgroundKeepAlive() {
+  // Wake Lock : empêche l'écran de s'éteindre automatiquement
+  if ("wakeLock" in navigator) {
+    navigator.wakeLock.request("screen")
+      .then((lock) => { state.wakeLock = lock; })
+      .catch(() => {});
+  }
+
+  // AudioContext silencieux : signal audio qui empêche l'OS de suspendre l'app
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const source = ctx.createBufferSource();
+    source.buffer = buf;
+    source.loop = true;
+    source.connect(ctx.destination);
+    source.start();
+    state.audioCtx = { ctx, source };
+  } catch (e) {
+    console.warn("Silent audio keep-alive unavailable:", e);
+  }
+
+  // MediaSession : déclare l'app comme lecteur audio actif auprès de l'OS
+  if ("mediaSession" in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: state.title || "Entretien en cours",
+      artist: "Nautes",
+    });
+    navigator.mediaSession.playbackState = "playing";
+    navigator.mediaSession.setActionHandler("pause", stopRecording);
+    navigator.mediaSession.setActionHandler("stop", stopRecording);
+  }
+}
+
+function stopBackgroundKeepAlive() {
+  state.wakeLock?.release().catch(() => {});
+  state.wakeLock = null;
+
+  if (state.audioCtx) {
+    try { state.audioCtx.source.stop(); } catch (e) {}
+    state.audioCtx.ctx.close().catch(() => {});
+    state.audioCtx = null;
+  }
+
+  if ("mediaSession" in navigator) {
+    navigator.mediaSession.metadata = null;
+    navigator.mediaSession.playbackState = "none";
+    navigator.mediaSession.setActionHandler("pause", null);
+    navigator.mediaSession.setActionHandler("stop", null);
+  }
 }
 
 function pickMimeType() {
