@@ -1,4 +1,4 @@
-const CACHE_NAME = "nautes-v11";
+const CACHE_NAME = "nautes-v12";
 const APP_ASSETS = [
   "./",
   "./index.html",
