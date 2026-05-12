@@ -210,6 +210,14 @@ h1 {
   font-weight: 800;
 }
 
+.field-hint {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .text-area,
 .text-input,
 .select-input {

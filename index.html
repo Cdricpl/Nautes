@@ -126,6 +126,10 @@
               <option value="offline">Offline - memoire du telephone</option>
               <option value="cloud">Cloud - a brancher plus tard</option>
             </select>
+
+            <label class="field-label" for="hfTokenInput">Token Hugging Face (IA)</label>
+            <input id="hfTokenInput" class="text-input" type="password" placeholder="hf_…" autocomplete="off" />
+            <small class="field-hint">Token gratuit sur huggingface.co → Settings → Access Tokens. Stocke uniquement sur cet appareil.</small>
           </section>
 
           <section class="tab-panel" data-panel="history">
@@ -142,10 +146,9 @@
             <button id="clearButton" class="secondary-button full danger" type="button">Effacer la note courante</button>
 
             <div class="backend-note">
-              <p><strong>API de résumé</strong></p>
-              <p>Le serveur local fournit désormais `/api/summarize` pour un résumé IA réel.</p>
-              <p>Si vous utilisez un token Hugging Face gratuit dans `server.mjs`, la synthèse sera confiée à l'API.</p>
-              <p>Sans token, l'application utilise un résumé local de secours.</p>
+              <p><strong>Synthese IA</strong></p>
+              <p>Avec un token Hugging Face (onglet Options), la synthese est realisee par Mistral-7B directement depuis votre appareil.</p>
+              <p>Sans token, un resume structure local est genere automatiquement.</p>
             </div>
           </section>
         </div>

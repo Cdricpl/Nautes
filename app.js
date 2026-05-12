@@ -30,6 +30,7 @@ const state = {
   consent: false,
   storageMode: "offline",
   useSpeechRecognition: true,
+  hfToken: "",
   updateReady: false,
   isRecording: false,
   elapsed: 0,
@@ -87,6 +88,7 @@ function bindElements() {
     "downloadButton",
     "shareButton",
     "clearButton",
+    "hfTokenInput",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
   });
@@ -144,6 +146,10 @@ function bindEvents() {
   });
   els.storageModeSelect.addEventListener("change", () => {
     state.storageMode = els.storageModeSelect.value;
+    persistSettings();
+  });
+  els.hfTokenInput.addEventListener("input", () => {
+    state.hfToken = els.hfTokenInput.value.trim();
     persistSettings();
   });
 
@@ -329,22 +335,56 @@ async function regenerateSummary() {
 }
 
 async function summarizeText(text, templateName) {
-  try {
-    const response = await fetch("/api/summarize", {
-      method: "POST",
-      headers: { "content-type": "application/json;charset=utf-8" },
-      body: JSON.stringify({ text, templateName }),
-    });
-
-    if (response.ok) {
-      const payload = await response.json();
-      if (payload?.summary) return payload.summary;
+  if (state.hfToken) {
+    try {
+      setStatus("Analyse IA en cours…");
+      return await summarizeWithHF(text, templateName, state.hfToken);
+    } catch (error) {
+      console.warn("HF API failed, using local fallback:", error);
+      setStatus("IA indisponible, résumé local utilisé.");
     }
-  } catch (error) {
-    console.warn("Summarization API failed:", error);
+  }
+  return fakeSummarize(text, templateName);
+}
+
+async function summarizeWithHF(text, templateName, token) {
+  const template = TEMPLATES[templateName];
+  const instruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
+
+  const response = await fetch(
+    "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.3/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "mistralai/Mistral-7B-Instruct-v0.3",
+        messages: [
+          {
+            role: "system",
+            content:
+              "Tu es un assistant professionnel spécialisé dans la rédaction de comptes-rendus en français. Sois concis, structuré et utilise des tirets pour les listes.",
+          },
+          {
+            role: "user",
+            content: `${instruction}\n\nTranscription :\n${text}`,
+          },
+        ],
+        max_tokens: 600,
+        temperature: 0.2,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`HF ${response.status}: ${err}`);
   }
 
-  return fakeSummarize(text, templateName);
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content ?? "";
 }
 
 async function copyCurrentNote() {
@@ -475,6 +515,9 @@ function render() {
   els.speechRecognitionSwitch.checked = state.useSpeechRecognition;
   els.consentSwitch.checked = state.consent;
   els.storageModeSelect.value = state.storageMode;
+  if (document.activeElement !== els.hfTokenInput) {
+    els.hfTokenInput.value = state.hfToken;
+  }
   els.updateButton.hidden = !state.updateReady;
 
   renderHistory();
@@ -589,6 +632,7 @@ function persistSettings() {
     useSpeechRecognition: state.useSpeechRecognition,
     consent: state.consent,
     storageMode: state.storageMode,
+    hfToken: state.hfToken,
   };
   localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
 }
