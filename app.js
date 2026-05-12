@@ -30,6 +30,7 @@ const state = {
   consent: false,
   storageMode: "offline",
   useSpeechRecognition: true,
+  updateReady: false,
   isRecording: false,
   elapsed: 0,
   transcript: "",
@@ -42,6 +43,8 @@ const state = {
 };
 
 const els = {};
+let waitingServiceWorker = null;
+let refreshingServiceWorker = false;
 
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
@@ -64,6 +67,7 @@ function bindElements() {
     "recordLabel",
     "timer",
     "statusText",
+    "updateButton",
     "resultPanel",
     "transcriptText",
     "summaryText",
@@ -157,6 +161,13 @@ function bindEvents() {
   els.saveCurrentButton.addEventListener("click", saveCurrentNote);
   els.downloadButton.addEventListener("click", downloadCurrentNote);
   els.shareButton.addEventListener("click", shareCurrentNote);
+  els.updateButton.addEventListener("click", () => {
+    if (waitingServiceWorker) {
+      waitingServiceWorker.postMessage({ type: "SKIP_WAITING" });
+    } else {
+      window.location.reload();
+    }
+  });
   els.clearButton.addEventListener("click", clearDraft);
   els.clearHistoryButton.addEventListener("click", clearHistory);
 }
@@ -464,6 +475,7 @@ function render() {
   els.speechRecognitionSwitch.checked = state.useSpeechRecognition;
   els.consentSwitch.checked = state.consent;
   els.storageModeSelect.value = state.storageMode;
+  els.updateButton.hidden = !state.updateReady;
 
   renderHistory();
 }
@@ -545,6 +557,13 @@ function checkEnvironment() {
 
 function toggleSettings(open) {
   els.settingsPanel.hidden = !open;
+}
+
+function promptUpdate(worker) {
+  waitingServiceWorker = worker;
+  state.updateReady = true;
+  setStatus("Nouvelle version disponible. Cliquez sur Recharger pour mettre à jour.");
+  render();
 }
 
 function setStatus(text) {
@@ -704,7 +723,27 @@ function sleep(ms) {
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
   if (location.protocol === "file:") return;
-  navigator.serviceWorker.register("./sw.js").catch(() => {
-    // L'app reste utilisable sans service worker, notamment en ouverture locale.
+
+  navigator.serviceWorker.register("./sw.js").then((registration) => {
+    if (registration.waiting) {
+      promptUpdate(registration.waiting);
+    }
+
+    registration.addEventListener("updatefound", () => {
+      const newWorker = registration.installing;
+      if (!newWorker) return;
+
+      newWorker.addEventListener("statechange", () => {
+        if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+          promptUpdate(newWorker);
+        }
+      });
+    });
+  });
+
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshingServiceWorker) return;
+    refreshingServiceWorker = true;
+    window.location.reload();
   });
 }
