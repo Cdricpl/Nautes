@@ -18,7 +18,7 @@ const STORAGE_KEYS = {
   draft: "nautes.draft.v1",
 };
 
-const HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions";
+const HF_INFERENCE_URL = "https://router.huggingface.co/hf-inference/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const supportsSpeechRecognition = !!SpeechRecognition;
@@ -467,28 +467,34 @@ async function summarizeWithHF(text, templateName, token) {
   }
 
   const messages = buildHfMessages(instruction, text);
-  const response = await fetch(HF_INFERENCE_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "Qwen/Qwen2.5-7B-Instruct",
-      messages,
-      max_tokens: 600,
-      temperature: 0.2,
-      stream: false,
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`HF ${response.status}: ${err}`);
+  const MAX_RETRIES = 3;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 45_000);
+    try {
+      const response = await fetch(HF_INFERENCE_URL, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "Qwen/Qwen2.5-7B-Instruct", messages, max_tokens: 600, temperature: 0.2, stream: false }),
+      });
+      window.clearTimeout(timeout);
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`HF ${response.status}: ${err}`);
+      }
+      const data = await response.json();
+      return parseHfChatResponse(data);
+    } catch (err) {
+      window.clearTimeout(timeout);
+      if (attempt < MAX_RETRIES) {
+        setStatus(`IA : modèle en démarrage, nouvelle tentative ${attempt + 1}/${MAX_RETRIES}…`);
+        await sleep(5_000);
+      } else {
+        throw err;
+      }
+    }
   }
-
-  const data = await response.json();
-  return parseHfChatResponse(data);
 }
 
 function buildHfMessages(instruction, text) {
