@@ -442,13 +442,8 @@ async function summarizeWithHF(text, templateName, token) {
   const template = TEMPLATES[templateName];
   const instruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
 
-  const prompt =
-    `<s>[INST] Tu es un assistant professionnel spécialisé dans la rédaction de comptes-rendus en français. ` +
-    `Sois concis, structuré, utilise des tirets pour les listes.\n\n` +
-    `${instruction}\n\nTranscription :\n${text} [/INST]`;
-
   const response = await fetch(
-    "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1",
+    "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions",
     {
       method: "POST",
       headers: {
@@ -456,8 +451,18 @@ async function summarizeWithHF(text, templateName, token) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        inputs: prompt,
-        parameters: { max_new_tokens: 600, temperature: 0.2, return_full_text: false },
+        messages: [
+          {
+            role: "system",
+            content: "Tu es un assistant professionnel spécialisé dans la rédaction de comptes-rendus en français. Sois concis, structuré, utilise des tirets pour les listes.",
+          },
+          {
+            role: "user",
+            content: `${instruction}\n\nTranscription :\n${text}`,
+          },
+        ],
+        max_tokens: 600,
+        temperature: 0.2,
       }),
     }
   );
@@ -468,8 +473,7 @@ async function summarizeWithHF(text, templateName, token) {
   }
 
   const data = await response.json();
-  const generated = Array.isArray(data) ? data[0]?.generated_text : data?.generated_text;
-  return (generated ?? "").trim();
+  return (data.choices?.[0]?.message?.content ?? "").trim();
 }
 
 async function copyCurrentNote() {
