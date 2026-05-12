@@ -432,7 +432,9 @@ async function summarizeText(text, templateName) {
       throw new Error("Réponse vide");
     } catch (error) {
       console.warn("HF summarization failed:", error);
-      setStatus(`IA : ${error.message ?? "erreur"} — résumé local utilisé.`);
+      const msg = error.message ?? "erreur inconnue";
+      setStatus(`Erreur IA : ${msg}`);
+      return `⚠ Erreur IA : ${msg}\n\n` + await fakeSummarize(text, templateName);
     }
   }
   return fakeSummarize(text, templateName);
