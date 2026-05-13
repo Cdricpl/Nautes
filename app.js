@@ -20,6 +20,8 @@ const STORAGE_KEYS = {
 
 const HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions";
 
+const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
+
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const supportsSpeechRecognition = !!SpeechRecognition;
 
@@ -54,6 +56,8 @@ let refreshingServiceWorker = false;
 
 document.addEventListener("visibilitychange", () => {
   if (state.isRecording && document.visibilityState === "visible" && "wakeLock" in navigator) {
+    state.wakeLock?.release().catch(() => {});
+    state.wakeLock = null;
     navigator.wakeLock.request("screen")
       .then((lock) => { state.wakeLock = lock; })
       .catch(() => {});
@@ -396,7 +400,7 @@ function stopBackgroundKeepAlive() {
   state.wakeLock = null;
 
   if (state.audioCtx) {
-    try { state.audioCtx.source.stop(); } catch (e) {}
+    try { state.audioCtx.source.stop(); } catch {}
     state.audioCtx.ctx.close().catch(() => {});
     state.audioCtx = null;
   }
@@ -436,7 +440,7 @@ async function summarizeText(text, templateName) {
       console.warn("HF summarization failed:", error);
       const msg = error.message ?? "erreur inconnue";
       setStatus(`Erreur IA : ${msg}`);
-      return `⚠ Erreur IA : ${msg}\n\n` + await fakeSummarize(text, templateName);
+      return `⚠ Erreur IA : ${msg}\n\n` + fakeSummarize(text, templateName);
     }
   }
 
@@ -547,9 +551,10 @@ function saveCurrentNote(options = {}) {
   if (!state.transcript.trim() && !state.summary.trim()) return;
   const notes = getNotes();
   const now = new Date().toISOString();
-  const existingIndex = notes.findIndex((note) => note.id === getDraftId());
+  const draftId = getDraftId();
+  const existingIndex = notes.findIndex((note) => note.id === draftId);
   const note = {
-    id: getDraftId(),
+    id: draftId,
     title: state.title || "Note sans titre",
     createdAt: existingIndex >= 0 ? notes[existingIndex].createdAt : now,
     updatedAt: now,
@@ -854,17 +859,14 @@ function sanitizeFileName(value) {
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => {
-    const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
-    return map[char];
-  });
+  return String(value).replace(/[&<>"']/g, (char) => HTML_ESCAPE_MAP[char]);
 }
 
 async function transcribeAudio(blob, language) {
   if (state.hfToken) {
     try {
       setStatus("Transcription Whisper en cours…");
-      return await transcribeWithWhisper(blob, language);
+      return await transcribeWithWhisper(blob);
     } catch (error) {
       console.warn("Whisper failed:", error);
       setStatus("Transcription IA échouée, vérifiez votre token.");
@@ -875,8 +877,7 @@ async function transcribeAudio(blob, language) {
   return "";
 }
 
-async function transcribeWithWhisper(blob, language) {
-  const langCode = language.split("-")[0];
+async function transcribeWithWhisper(blob) {
   const response = await fetch(
     "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
     {
@@ -898,8 +899,7 @@ async function transcribeWithWhisper(blob, language) {
   return (data.text ?? "").trim();
 }
 
-async function fakeSummarize(text, templateName) {
-  await sleep(700);
+function fakeSummarize(text, templateName) {
   if (!text.trim()) return "";
   const lines = text.split(/\n+/).filter(Boolean);
   const key = lines.slice(-4).join(" ");
