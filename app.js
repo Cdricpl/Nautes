@@ -19,6 +19,7 @@ const STORAGE_KEYS = {
 };
 
 const HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions";
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 const MAX_CHUNK = 10_000;
 
 const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
@@ -43,6 +44,7 @@ const state = {
   consent: false,
   storageMode: "offline",
   useSpeechRecognition: true,
+  geminiToken: "",
   hfToken: "",
   wakeLock: null,
   audioCtx: null,
@@ -123,6 +125,7 @@ function bindElements() {
     "shareButton",
     "clearButton",
     "hfTokenInput",
+    "geminiTokenInput",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
   });
@@ -184,6 +187,10 @@ function bindEvents() {
   });
   els.hfTokenInput.addEventListener("input", () => {
     state.hfToken = els.hfTokenInput.value.trim();
+    persistToken();
+  });
+  els.geminiTokenInput.addEventListener("input", () => {
+    state.geminiToken = els.geminiTokenInput.value.trim();
     persistToken();
   });
 
@@ -455,6 +462,20 @@ async function regenerateSummary() {
 }
 
 async function summarizeText(text, templateName) {
+  if (state.geminiToken) {
+    try {
+      setStatus("Analyse Gemini en cours…");
+      const result = await summarizeWithGemini(text, templateName);
+      if (result) return result;
+      throw new Error("Réponse vide");
+    } catch (error) {
+      console.warn("Gemini summarization failed:", error);
+      const msg = error.message ?? "erreur inconnue";
+      setStatus(`Erreur Gemini : ${msg}`);
+      return `⚠ Erreur Gemini : ${msg}\n\n` + fakeSummarize(text, templateName);
+    }
+  }
+
   if (state.hfToken) {
     try {
       setStatus("Analyse IA en cours…");
@@ -482,6 +503,37 @@ async function summarizeText(text, templateName) {
   }
 
   return fakeSummarize(text, templateName);
+}
+
+async function summarizeWithGemini(text, templateName) {
+  const template = TEMPLATES[templateName];
+  const instruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
+  const systemText = "Tu es un assistant professionnel specialise dans la redaction de comptes-rendus en francais. Sois concis, structure, utilise des tirets pour les listes.";
+
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 60_000);
+  try {
+    const response = await fetch(`${GEMINI_URL}?key=${state.geminiToken}`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        system_instruction: { parts: [{ text: systemText }] },
+        contents: [{ role: "user", parts: [{ text: `${instruction}\n\nTranscription :\n${text}` }] }],
+        generationConfig: { maxOutputTokens: 800, temperature: 0.2 },
+      }),
+    });
+    window.clearTimeout(timeout);
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Gemini ${response.status}: ${err}`);
+    }
+    const data = await response.json();
+    return String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+  } catch (err) {
+    window.clearTimeout(timeout);
+    throw err;
+  }
 }
 
 async function callHfApi(messages) {
@@ -723,6 +775,9 @@ function render() {
   if (document.activeElement !== els.hfTokenInput) {
     els.hfTokenInput.value = state.hfToken;
   }
+  if (document.activeElement !== els.geminiTokenInput) {
+    els.geminiTokenInput.value = state.geminiToken;
+  }
   els.updateButton.hidden = !state.updateReady;
 
   renderHistory();
@@ -843,10 +898,11 @@ function persistSettings() {
 
 function persistToken() {
   sessionStorage.setItem("nautes.hfToken", state.hfToken);
+  sessionStorage.setItem("nautes.geminiToken", state.geminiToken);
 }
 
 function loadToken() {
-  // Migration: if token was previously stored in localStorage, move it to sessionStorage
+  // Migration: if tokens were previously stored in localStorage, move to sessionStorage
   try {
     const old = JSON.parse(localStorage.getItem(STORAGE_KEYS.settings) || "{}");
     if (old.hfToken) {
@@ -856,6 +912,7 @@ function loadToken() {
     }
   } catch {}
   state.hfToken = sessionStorage.getItem("nautes.hfToken") ?? "";
+  state.geminiToken = sessionStorage.getItem("nautes.geminiToken") ?? "";
 }
 
 function loadDraft() {

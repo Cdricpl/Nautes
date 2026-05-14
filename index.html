@@ -127,9 +127,13 @@
               <option value="cloud">Cloud - a brancher plus tard</option>
             </select>
 
-            <label class="field-label" for="hfTokenInput">Token Hugging Face (IA)</label>
+            <label class="field-label" for="geminiTokenInput">Token Google Gemini (IA mobile)</label>
+            <input id="geminiTokenInput" class="text-input" type="password" placeholder="AIza…" autocomplete="off" />
+            <small class="field-hint">Token gratuit sur aistudio.google.com → Get API key. Recommande sur telephone : fonctionne sans serveur. Stocke uniquement sur cet appareil.</small>
+
+            <label class="field-label" for="hfTokenInput">Token Hugging Face (IA PC)</label>
             <input id="hfTokenInput" class="text-input" type="password" placeholder="hf_…" autocomplete="off" />
-            <small class="field-hint">Token gratuit sur huggingface.co → Settings → Access Tokens. Stocke uniquement sur cet appareil.</small>
+            <small class="field-hint">Token gratuit sur huggingface.co → Settings → Access Tokens. Fonctionne en local avec node server.mjs. Stocke uniquement sur cet appareil.</small>
           </section>
 
           <section class="tab-panel" data-panel="history">
@@ -147,7 +151,8 @@
 
             <div class="backend-note">
               <p><strong>Synthese IA</strong></p>
-              <p>Avec un token Hugging Face (onglet Options), la synthese utilise Hugging Face. En local, le serveur integre sert de relais pour eviter les blocages navigateur.</p>
+              <p>Token <strong>Gemini</strong> (recommande sur telephone) : fonctionne directement depuis le navigateur mobile, sans serveur.</p>
+              <p>Token <strong>Hugging Face</strong> : fonctionne en local avec <code>node server.mjs</code>. Peut echouer sur telephone (limitation navigateur).</p>
               <p>Sans token, un resume structure local est genere automatiquement.</p>
             </div>
           </section>
