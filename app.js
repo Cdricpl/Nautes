@@ -19,6 +19,7 @@ const STORAGE_KEYS = {
 };
 
 const HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions";
+const MAX_CHUNK = 10_000;
 
 const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
 
@@ -457,7 +458,9 @@ async function summarizeText(text, templateName) {
   if (state.hfToken) {
     try {
       setStatus("Analyse IA en cours…");
-      const result = await summarizeWithHF(text, templateName, state.hfToken);
+      const result = text.length > MAX_CHUNK
+        ? await summarizeByChunks(text, templateName)
+        : await summarizeWithHF(text, templateName, state.hfToken);
       if (result) return result;
       throw new Error("Réponse vide");
     } catch (error) {
@@ -481,6 +484,56 @@ async function summarizeText(text, templateName) {
   return fakeSummarize(text, templateName);
 }
 
+async function callHfApi(messages) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 45_000);
+    try {
+      const response = await fetch(HF_INFERENCE_URL, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { Authorization: `Bearer ${state.hfToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "Qwen/Qwen2.5-7B-Instruct", messages, max_tokens: 600, temperature: 0.2, stream: false }),
+      });
+      window.clearTimeout(timeout);
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`HF ${response.status}: ${err}`);
+      }
+      return parseHfChatResponse(await response.json());
+    } catch (err) {
+      window.clearTimeout(timeout);
+      if (attempt < 3) {
+        setStatus(`IA : modèle en démarrage, nouvelle tentative ${attempt + 1}/3…`);
+        await sleep(5_000);
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
+async function summarizeByChunks(text, templateName) {
+  const chunks = [];
+  for (let i = 0; i < text.length; i += MAX_CHUNK) {
+    chunks.push(text.slice(i, i + MAX_CHUNK));
+  }
+
+  const partials = [];
+  for (let i = 0; i < chunks.length; i++) {
+    setStatus(`Analyse partie ${i + 1}/${chunks.length}…`);
+    const instruction = `Extrait les points clés de la partie ${i + 1}/${chunks.length} de cette transcription. Sois bref, utilise des tirets.`;
+    partials.push(await callHfApi(buildHfMessages(instruction, chunks[i])));
+  }
+
+  if (partials.length === 1) return partials[0];
+
+  setStatus("Synthèse finale…");
+  const template = TEMPLATES[templateName];
+  const finalInstruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
+  return await callHfApi(buildHfMessages(finalInstruction, partials.join("\n\n---\n\n")));
+}
+
 async function summarizeWithHF(text, templateName, token) {
   const template = TEMPLATES[templateName];
   const instruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
@@ -494,35 +547,7 @@ async function summarizeWithHF(text, templateName, token) {
     }
   }
 
-  const messages = buildHfMessages(instruction, text);
-  const MAX_RETRIES = 3;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 45_000);
-    try {
-      const response = await fetch(HF_INFERENCE_URL, {
-        method: "POST",
-        signal: controller.signal,
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "Qwen/Qwen2.5-7B-Instruct", messages, max_tokens: 600, temperature: 0.2, stream: false }),
-      });
-      window.clearTimeout(timeout);
-      if (!response.ok) {
-        const err = await response.text();
-        throw new Error(`HF ${response.status}: ${err}`);
-      }
-      const data = await response.json();
-      return parseHfChatResponse(data);
-    } catch (err) {
-      window.clearTimeout(timeout);
-      if (attempt < MAX_RETRIES) {
-        setStatus(`IA : modèle en démarrage, nouvelle tentative ${attempt + 1}/${MAX_RETRIES}…`);
-        await sleep(5_000);
-      } else {
-        throw err;
-      }
-    }
-  }
+  return await callHfApi(buildHfMessages(instruction, text));
 }
 
 function buildHfMessages(instruction, text) {
