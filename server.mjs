@@ -90,27 +90,34 @@ function parseHfChatResponse(data) {
 }
 
 async function summarizeWithHuggingFace(text, templateName, token) {
-  const response = await fetch(HF_CHAT_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: HF_CHAT_MODEL,
-      messages: buildHfMessages(text, templateName),
-      max_tokens: 600,
-      temperature: 0.2,
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45_000);
+  try {
+    const response = await fetch(HF_CHAT_URL, {
+      signal: controller.signal,
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: HF_CHAT_MODEL,
+        messages: buildHfMessages(text, templateName),
+        max_tokens: 600,
+        temperature: 0.2,
+      }),
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Hugging Face error ${response.status}: ${errorText}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Hugging Face error ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    return parseHfChatResponse(data);
+  } finally {
+    clearTimeout(timeout);
   }
-
-  const data = await response.json();
-  return parseHfChatResponse(data);
 }
 
 createServer(async (request, response) => {

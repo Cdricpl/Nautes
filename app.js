@@ -22,6 +22,14 @@ const HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2
 
 const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
 
+function debounce(fn, delay) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), delay);
+  };
+}
+
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const supportsSpeechRecognition = !!SpeechRecognition;
 
@@ -67,12 +75,20 @@ document.addEventListener("visibilitychange", () => {
 document.addEventListener("DOMContentLoaded", () => {
   bindElements();
   loadSettings();
+  loadToken();
   loadDraft();
   fillTemplateSelect();
   bindEvents();
   checkEnvironment();
   render();
   registerServiceWorker();
+
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      e.preventDefault();
+      saveCurrentNote();
+    }
+  });
 });
 
 function bindElements() {
@@ -130,10 +146,10 @@ function bindEvents() {
     button.addEventListener("click", () => activateTab(button.dataset.tab));
   });
 
+  const debouncedPersistTitle = debounce(() => { persistSettings(); persistDraft(); }, 400);
   els.titleInput.addEventListener("input", () => {
     state.title = els.titleInput.value;
-    persistSettings();
-    persistDraft();
+    debouncedPersistTitle();
   });
   els.languageSelect.addEventListener("change", () => {
     state.language = els.languageSelect.value;
@@ -167,7 +183,7 @@ function bindEvents() {
   });
   els.hfTokenInput.addEventListener("input", () => {
     state.hfToken = els.hfTokenInput.value.trim();
-    persistSettings();
+    persistToken();
   });
 
   els.transcriptText.addEventListener("input", () => {
@@ -220,6 +236,10 @@ async function startRecording() {
       const blob = new Blob(state.chunks, { type: recorder.mimeType || "audio/webm" });
       const text = await transcribeAudio(blob, state.language);
       state.transcript = state.transcript ? `${state.transcript}\n${text}` : text;
+      if (state.transcript.length > 30_000) {
+        state.transcript = state.transcript.slice(-30_000);
+        setStatus("Transcription tronquee (limite atteinte).");
+      }
 
       if (!state.keepAudio) state.chunks = [];
       stream.getTracks().forEach((track) => track.stop());
@@ -282,6 +302,10 @@ function spawnRecognition() {
       .map((result) => result[0].transcript)
       .join(" ");
     state.transcript = state.transcript ? `${state.transcript}\n${transcript}` : transcript;
+    if (state.transcript.length > 30_000) {
+      state.transcript = state.transcript.slice(-30_000);
+      setStatus("Transcription tronquee (limite atteinte).");
+    }
     persistDraft();
     render();
   };
@@ -620,10 +644,12 @@ async function shareCurrentNote() {
 }
 
 function clearDraft() {
+  state.title = `Rendez-vous - ${new Date().toLocaleDateString("fr-BE")}`;
   state.transcript = "";
   state.summary = "";
   state.chunks = [];
   localStorage.removeItem(STORAGE_KEYS.draft);
+  persistSettings();
   setStatus("Note courante effacee");
   render();
 }
@@ -786,9 +812,25 @@ function persistSettings() {
     useSpeechRecognition: state.useSpeechRecognition,
     consent: state.consent,
     storageMode: state.storageMode,
-    hfToken: state.hfToken,
   };
   localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings));
+}
+
+function persistToken() {
+  sessionStorage.setItem("nautes.hfToken", state.hfToken);
+}
+
+function loadToken() {
+  // Migration: if token was previously stored in localStorage, move it to sessionStorage
+  try {
+    const old = JSON.parse(localStorage.getItem(STORAGE_KEYS.settings) || "{}");
+    if (old.hfToken) {
+      sessionStorage.setItem("nautes.hfToken", old.hfToken);
+      delete old.hfToken;
+      localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(old));
+    }
+  } catch {}
+  state.hfToken = sessionStorage.getItem("nautes.hfToken") ?? "";
 }
 
 function loadDraft() {
@@ -866,7 +908,7 @@ async function transcribeAudio(blob, language) {
   if (state.hfToken) {
     try {
       setStatus("Transcription Whisper en cours…");
-      return await transcribeWithWhisper(blob);
+      return await transcribeWithWhisper(blob, language);
     } catch (error) {
       console.warn("Whisper failed:", error);
       setStatus("Transcription IA échouée, vérifiez votre token.");
@@ -877,18 +919,18 @@ async function transcribeAudio(blob, language) {
   return "";
 }
 
-async function transcribeWithWhisper(blob) {
-  const response = await fetch(
-    "https://api-inference.huggingface.co/models/openai/whisper-large-v3",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${state.hfToken}`,
-        "Content-Type": blob.type || "audio/webm",
-      },
-      body: blob,
-    }
-  );
+async function transcribeWithWhisper(blob, language) {
+  const langCode = language ? language.split("-")[0] : "";
+  const url = `https://api-inference.huggingface.co/models/openai/whisper-large-v3${langCode ? `?language=${langCode}` : ""}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${state.hfToken}`,
+      "Content-Type": blob.type || "audio/webm",
+      "x-wait-for-model": "true",
+    },
+    body: blob,
+  });
 
   if (!response.ok) {
     const err = await response.text();
