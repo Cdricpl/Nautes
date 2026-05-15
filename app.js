@@ -19,7 +19,8 @@ const STORAGE_KEYS = {
 };
 
 const HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions";
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"];
 const MAX_CHUNK = 10_000;
 
 const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
@@ -509,31 +510,41 @@ async function summarizeWithGemini(text, templateName) {
   const template = TEMPLATES[templateName];
   const instruction = template?.user ?? "Fais un compte-rendu structuré de cette transcription en français.";
   const systemText = "Tu es un assistant professionnel specialise dans la redaction de comptes-rendus en francais. Sois concis, structure, utilise des tirets pour les listes.";
+  const body = JSON.stringify({
+    system_instruction: { parts: [{ text: systemText }] },
+    contents: [{ role: "user", parts: [{ text: `${instruction}\n\nTranscription :\n${text}` }] }],
+    generationConfig: { maxOutputTokens: 800, temperature: 0.2 },
+  });
 
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 60_000);
-  try {
-    const response = await fetch(`${GEMINI_URL}?key=${state.geminiToken}`, {
-      method: "POST",
-      signal: controller.signal,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemText }] },
-        contents: [{ role: "user", parts: [{ text: `${instruction}\n\nTranscription :\n${text}` }] }],
-        generationConfig: { maxOutputTokens: 800, temperature: 0.2 },
-      }),
-    });
-    window.clearTimeout(timeout);
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Gemini ${response.status}: ${err}`);
+  for (const model of GEMINI_MODELS) {
+    setStatus(`Analyse Gemini (${model})…`);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 60_000);
+    try {
+      const response = await fetch(`${GEMINI_BASE_URL}/${model}:generateContent?key=${state.geminiToken}`, {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      window.clearTimeout(timeout);
+      if (response.status === 429) {
+        console.warn(`Gemini ${model} quota atteint, modèle suivant…`);
+        continue;
+      }
+      if (!response.ok) {
+        const err = await response.text();
+        throw new Error(`Gemini ${response.status}: ${err}`);
+      }
+      const data = await response.json();
+      return String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
+    } catch (err) {
+      window.clearTimeout(timeout);
+      if (err.name === "AbortError") throw new Error("Délai dépassé (60 s)");
+      throw err;
     }
-    const data = await response.json();
-    return String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
-  } catch (err) {
-    window.clearTimeout(timeout);
-    throw err;
   }
+  throw new Error("Quota Gemini atteint sur tous les modèles — réessayez demain ou activez la facturation sur aistudio.google.com");
 }
 
 async function callHfApi(messages) {
