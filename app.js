@@ -336,7 +336,18 @@ function spawnRecognition() {
     const text = sessionBuffer.trim();
     sessionBuffer = "";
     if (!text) return;
-    state.transcript = state.transcript ? `${state.transcript}\n${text}` : text;
+    // If the last committed line is a prefix of the new text (mobile restart overlap),
+    // replace it instead of appending — avoids "avec ceci" / "avec ceci c'est normal" duplicates
+    const lines = state.transcript ? state.transcript.split("\n") : [];
+    const last = lines[lines.length - 1] ?? "";
+    const textLow = text.toLowerCase();
+    const lastLow = last.trim().toLowerCase();
+    if (lastLow && text.length > last.trim().length && textLow.startsWith(lastLow)) {
+      lines[lines.length - 1] = text;
+      state.transcript = lines.join("\n");
+    } else {
+      state.transcript = state.transcript ? `${state.transcript}\n${text}` : text;
+    }
     if (state.transcript.length > 30_000) {
       state.transcript = state.transcript.slice(-30_000);
       setStatus("Transcription tronquee (limite atteinte).");
@@ -356,10 +367,9 @@ function spawnRecognition() {
       }
     }
     if (els.liveText) {
-      const committed = state.transcript.split("\n").slice(-2).join("\n");
-      const live = sessionBuffer + (interim ? ` ${interim}` : "");
-      const parts = [committed, live.trim()].filter(Boolean);
-      els.liveText.textContent = parts.join("\n");
+      // Show only the current session: no committed history, just what's being said now
+      const live = (sessionBuffer + (interim ? ` ${interim}` : "")).trim();
+      els.liveText.textContent = live || "…";
       els.livePanel.scrollTop = els.livePanel.scrollHeight;
     }
   };
