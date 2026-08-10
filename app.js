@@ -327,31 +327,39 @@ function spawnRecognition() {
   recognition.lang = state.language;
   recognition.maxAlternatives = 1;
 
+  // Buffer accumulates finals within this recognition session.
+  // Committed to state.transcript only when the session ends,
+  // preventing duplicated partial phrases in the stored transcript.
+  let sessionBuffer = "";
+
+  function commitBuffer() {
+    const text = sessionBuffer.trim();
+    sessionBuffer = "";
+    if (!text) return;
+    state.transcript = state.transcript ? `${state.transcript}\n${text}` : text;
+    if (state.transcript.length > 30_000) {
+      state.transcript = state.transcript.slice(-30_000);
+      setStatus("Transcription tronquee (limite atteinte).");
+    }
+    persistDraft();
+  }
+
   recognition.onresult = (event) => {
     let interim = "";
-    const newFinals = [];
     for (let i = event.resultIndex; i < event.results.length; i++) {
       const r = event.results[i];
       if (r.isFinal) {
         const t = r[0].transcript.trim();
-        if (t) newFinals.push(t);
+        if (t) sessionBuffer += (sessionBuffer ? " " : "") + t;
       } else {
         interim += r[0].transcript;
       }
     }
-    if (newFinals.length) {
-      const added = newFinals.join(" ");
-      state.transcript = state.transcript ? `${state.transcript}\n${added}` : added;
-      if (state.transcript.length > 30_000) {
-        state.transcript = state.transcript.slice(-30_000);
-        setStatus("Transcription tronquee (limite atteinte).");
-      }
-      persistDraft();
-    }
     if (els.liveText) {
-      const recent = state.transcript.split("\n").slice(-4).join("\n");
-      els.liveText.innerHTML = escapeHtml(recent) +
-        (interim ? `<span class="live-interim"> ${escapeHtml(interim)}</span>` : "");
+      const committed = state.transcript.split("\n").slice(-2).join("\n");
+      const live = sessionBuffer + (interim ? ` ${interim}` : "");
+      const parts = [committed, live.trim()].filter(Boolean);
+      els.liveText.textContent = parts.join("\n");
       els.livePanel.scrollTop = els.livePanel.scrollHeight;
     }
   };
@@ -362,7 +370,8 @@ function spawnRecognition() {
   };
 
   recognition.onend = async () => {
-    if (els.liveText && !state.isRecording) els.liveText.innerHTML = "";
+    commitBuffer();
+    if (els.liveText && !state.isRecording) els.liveText.textContent = "";
     state.speechRecognition = null;
 
     // Silence ou pause — relancer tant que l'utilisateur n'a pas cliqué Stop
