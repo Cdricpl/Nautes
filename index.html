@@ -27,7 +27,9 @@
 
       <main class="main-screen" aria-live="polite">
         <button id="recordButton" class="record-button" type="button">
-          <span id="recordIcon" class="record-icon" aria-hidden="true"></span>
+          <span class="ring ring1" aria-hidden="true"></span>
+          <span class="ring ring2" aria-hidden="true"></span>
+          <span class="record-icon" aria-hidden="true"></span>
           <span id="recordLabel">Demarrer</span>
         </button>
 
@@ -35,6 +37,11 @@
           <p id="timer" class="timer" hidden>0:00</p>
           <p id="statusText">Pret</p>
           <button id="updateButton" class="secondary-button ghost" type="button" hidden>Recharger</button>
+        </section>
+
+        <section id="livePanel" class="live-panel" hidden aria-live="polite">
+          <p class="live-label">Transcription en cours</p>
+          <div id="liveText" class="live-text"></div>
         </section>
       </main>
 
@@ -47,8 +54,12 @@
         <label class="field-label" for="transcriptText">Transcription</label>
         <textarea id="transcriptText" class="text-area" placeholder="La transcription apparaitra ici..."></textarea>
 
-        <label class="field-label" for="summaryText">Compte-rendu IA</label>
-        <textarea id="summaryText" class="text-area tall" placeholder="Le compte-rendu apparaitra ici..."></textarea>
+        <div class="summary-header">
+          <label class="field-label" for="summaryText">Compte-rendu IA</label>
+          <button id="summaryEditButton" class="quiet-button" type="button">Modifier</button>
+        </div>
+        <div id="summaryView" class="summary-view" role="region" aria-label="Compte-rendu"></div>
+        <textarea id="summaryText" class="text-area tall" hidden placeholder="Le compte-rendu apparaitra ici..."></textarea>
 
         <div class="secondary-actions">
           <button id="regenerateButton" class="secondary-button" type="button">Regenerer</button>
@@ -126,6 +137,15 @@
               <option value="offline">Offline - memoire du telephone</option>
               <option value="cloud">Cloud - a brancher plus tard</option>
             </select>
+
+            <div id="setupTip" class="setup-tip" hidden>
+              <p><strong>Configurez Gemini pour activer la synthese IA</strong></p>
+              <ol>
+                <li>Allez sur <strong>aistudio.google.com</strong></li>
+                <li>Creez une cle API gratuite (Get API key)</li>
+                <li>Collez-la dans le champ ci-dessous</li>
+              </ol>
+            </div>
 
             <label class="field-label" for="geminiTokenInput">Token Google Gemini (IA mobile)</label>
             <input id="geminiTokenInput" class="text-input" type="password" placeholder="AIza…" autocomplete="off" />

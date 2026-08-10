@@ -113,6 +113,8 @@ h1 {
 }
 
 .record-button {
+  position: relative;
+  overflow: visible;
   width: min(58vw, 230px);
   height: min(58vw, 230px);
   min-width: 168px;
@@ -129,6 +131,39 @@ h1 {
   font-size: clamp(1.45rem, 8vw, 2.25rem);
   font-weight: 800;
   box-shadow: var(--shadow);
+}
+
+.ring {
+  position: absolute;
+  border-radius: 999px;
+  border: 2px solid var(--danger);
+  opacity: 0;
+  pointer-events: none;
+  inset: -20px;
+}
+
+.ring2 {
+  inset: -44px;
+}
+
+.record-button.recording .ring1 {
+  animation: pulse-ring 2.4s ease-out infinite;
+}
+
+.record-button.recording .ring2 {
+  animation: pulse-ring 2.4s ease-out 0.8s infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.88);
+  }
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
 }
 
 .record-button.recording {
@@ -417,6 +452,129 @@ h1 {
   display: none !important;
 }
 
+/* ── Live transcript panel ── */
+.live-panel {
+  width: min(100%, 600px);
+  max-height: 180px;
+  overflow-y: auto;
+  text-align: left;
+  padding: 14px 16px 16px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.live-label {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-text {
+  color: var(--ink);
+  font-size: 0.94rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.live-interim {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ── Summary view/edit ── */
+.summary-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.summary-header .field-label {
+  margin-bottom: 0;
+}
+
+.summary-view {
+  margin-top: 8px;
+  min-height: 120px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 0.94rem;
+  line-height: 1.6;
+}
+
+.s-section {
+  margin-bottom: 18px;
+}
+
+.s-section:last-child {
+  margin-bottom: 0;
+}
+
+.s-heading {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.s-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.s-list li {
+  margin-bottom: 5px;
+}
+
+.s-list li:last-child {
+  margin-bottom: 0;
+}
+
+.s-plain {
+  margin: 0 0 4px;
+}
+
+/* ── Setup tip ── */
+.setup-tip {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  margin: 14px 0 4px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.setup-tip p {
+  margin: 0 0 8px;
+}
+
+.setup-tip ol {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.setup-tip li {
+  margin-bottom: 4px;
+}
+
+.s-pre {
+  white-space: pre-wrap;
+  margin: 0;
+  font: inherit;
+  word-break: break-word;
+}
+
 @media (min-width: 760px) {
   .app-shell {
     padding-left: 28px;
@@ -468,5 +626,10 @@ h1 {
 
   .settings-panel {
     background: rgba(0, 0, 0, 0.7);
+  }
+
+  .ring {
+    border-color: var(--danger);
+    opacity: 0;
   }
 }
