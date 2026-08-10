@@ -1,5 +1,5 @@
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   --bg: #f8fafc;
   --panel: #ffffff;
   --ink: #0f172a;
@@ -9,6 +9,7 @@
   --primary-ink: #ffffff;
   --danger: #dc2626;
   --danger-dark: #991b1b;
+  --danger-soft: #fee2e2;
   --soft: #f1f5f9;
   --shadow: 0 24px 70px rgba(15, 23, 42, 0.14);
 }
@@ -228,7 +229,7 @@ h1 {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fff;
+  background: var(--panel);
   color: var(--ink);
   outline: 0;
 }
@@ -276,7 +277,7 @@ h1 {
 
 .secondary-button.danger,
 .quiet-button.danger {
-  background: #fee2e2;
+  background: var(--danger-soft);
   color: var(--danger-dark);
 }
 
@@ -323,7 +324,7 @@ h1 {
 }
 
 .tab-button.active {
-  background: #fff;
+  background: var(--panel);
   color: var(--ink);
   box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
 }
@@ -376,7 +377,7 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 12px;
-  background: #fff;
+  background: var(--panel);
   text-align: left;
 }
 
@@ -392,7 +393,7 @@ h1 {
 
 .empty-state,
 .backend-note {
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--line);
   border-radius: 14px;
   padding: 14px;
   color: var(--muted);
@@ -432,5 +433,40 @@ h1 {
 
   .settings-panel {
     align-items: center;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --ink: #e2e8f0;
+    --muted: #94a3b8;
+    --line: #334155;
+    --primary: #334155;
+    --primary-ink: #f1f5f9;
+    --danger: #f87171;
+    --danger-dark: #fca5a5;
+    --danger-soft: #450a0a;
+    --soft: #0f172a;
+    --shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+  }
+
+  .icon-button {
+    box-shadow: none;
+  }
+
+  .result-panel,
+  .settings-card {
+    box-shadow: none;
+  }
+
+  .tab-button.active {
+    box-shadow: none;
+  }
+
+  .settings-panel {
+    background: rgba(0, 0, 0, 0.7);
   }
 }
