@@ -643,7 +643,7 @@ async function summarizeWithLocalApi(text, templateName, token) {
   }
 
   const data = await response.json();
-  if (data.source === "huggingface") return String(data.summary || "").trim();
+  if (data.summary) return String(data.summary).trim();
   return "";
 }
 
@@ -886,7 +886,10 @@ function setStatus(text) {
 function loadSettings() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEYS.settings) || "{}");
-    Object.assign(state, saved);
+    const keys = ["title", "templateName", "language", "debug", "keepAudio", "useSpeechRecognition", "consent", "storageMode"];
+    for (const key of keys) {
+      if (key in saved) state[key] = saved[key];
+    }
   } catch {
     persistSettings();
   }
