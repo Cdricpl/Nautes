@@ -101,7 +101,6 @@ function bindElements() {
     "closeSettingsButton",
     "settingsPanel",
     "recordButton",
-    "recordIcon",
     "recordLabel",
     "timer",
     "statusText",
@@ -916,11 +915,18 @@ function loadToken() {
   // Migration: if tokens were previously stored in localStorage, move to sessionStorage
   try {
     const old = JSON.parse(localStorage.getItem(STORAGE_KEYS.settings) || "{}");
+    let dirty = false;
     if (old.hfToken) {
       sessionStorage.setItem("nautes.hfToken", old.hfToken);
       delete old.hfToken;
-      localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(old));
+      dirty = true;
     }
+    if (old.geminiToken) {
+      sessionStorage.setItem("nautes.geminiToken", old.geminiToken);
+      delete old.geminiToken;
+      dirty = true;
+    }
+    if (dirty) localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(old));
   } catch {}
   state.hfToken = sessionStorage.getItem("nautes.hfToken") ?? "";
   state.geminiToken = sessionStorage.getItem("nautes.geminiToken") ?? "";
