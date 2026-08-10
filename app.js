@@ -20,7 +20,7 @@ const STORAGE_KEYS = {
 
 const HF_INFERENCE_URL = "https://api-inference.huggingface.co/models/Qwen/Qwen2.5-7B-Instruct/v1/chat/completions";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models";
-const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-8b"];
+const GEMINI_MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-latest"];
 const MAX_CHUNK = 10_000;
 
 const HTML_ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" };
@@ -331,6 +331,11 @@ function spawnRecognition() {
   // Committed to state.transcript only when the session ends,
   // preventing duplicated partial phrases in the stored transcript.
   let sessionBuffer = "";
+  // Some mobile browsers re-fire the same result slot as final multiple times,
+  // each time with an extended transcript ("avec ceci" → "avec ceci c'est normal").
+  // Track the last final so we can replace it in sessionBuffer instead of appending.
+  let lastFinal = "";
+  let lastFinalStart = 0;
 
   function commitBuffer() {
     const text = sessionBuffer.trim();
@@ -361,7 +366,17 @@ function spawnRecognition() {
       const r = event.results[i];
       if (r.isFinal) {
         const t = r[0].transcript.trim();
-        if (t) sessionBuffer += (sessionBuffer ? " " : "") + t;
+        if (!t) continue;
+        const tLow = t.toLowerCase();
+        const lastLow = lastFinal.toLowerCase();
+        if (lastFinal && tLow.startsWith(lastLow) && t.length > lastFinal.length) {
+          // Extended re-fire of same slot — replace in sessionBuffer
+          sessionBuffer = sessionBuffer.slice(0, lastFinalStart) + t;
+        } else {
+          lastFinalStart = sessionBuffer.length + (sessionBuffer ? 1 : 0);
+          sessionBuffer += (sessionBuffer ? " " : "") + t;
+        }
+        lastFinal = t;
       } else {
         interim += r[0].transcript;
       }
@@ -530,7 +545,7 @@ async function summarizeText(text, templateName) {
       console.warn("Gemini summarization failed:", error);
       const msg = error.message ?? "erreur inconnue";
       setStatus(`Erreur Gemini : ${msg}`);
-      return `⚠ Erreur Gemini : ${msg}\n\n` + fakeSummarize(text, templateName);
+      return fakeSummarize(text, templateName);
     }
   }
 
@@ -546,7 +561,7 @@ async function summarizeText(text, templateName) {
       console.warn("HF summarization failed:", error);
       const msg = error.message ?? "erreur inconnue";
       setStatus(`Erreur IA : ${msg}`);
-      return `⚠ Erreur IA : ${msg}\n\n` + fakeSummarize(text, templateName);
+      return fakeSummarize(text, templateName);
     }
   }
 
@@ -590,8 +605,14 @@ async function summarizeWithGemini(text, templateName) {
         continue;
       }
       if (!response.ok) {
-        const err = await response.text();
-        throw new Error(`Gemini ${response.status}: ${err}`);
+        let errMsg;
+        try {
+          const errBody = await response.json();
+          errMsg = errBody?.error?.message ?? `HTTP ${response.status}`;
+        } catch {
+          errMsg = await response.text().catch(() => `HTTP ${response.status}`);
+        }
+        throw new Error(`Gemini ${response.status}: ${errMsg}`);
       }
       const data = await response.json();
       return String(data?.candidates?.[0]?.content?.parts?.[0]?.text || "").trim();
