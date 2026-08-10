@@ -126,6 +126,11 @@ function bindElements() {
     "clearButton",
     "hfTokenInput",
     "geminiTokenInput",
+    "livePanel",
+    "liveText",
+    "summaryView",
+    "summaryEditButton",
+    "setupTip",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
   });
@@ -188,10 +193,28 @@ function bindEvents() {
   els.hfTokenInput.addEventListener("input", () => {
     state.hfToken = els.hfTokenInput.value.trim();
     persistToken();
+    render();
   });
   els.geminiTokenInput.addEventListener("input", () => {
     state.geminiToken = els.geminiTokenInput.value.trim();
     persistToken();
+    render();
+  });
+  els.summaryEditButton.addEventListener("click", () => {
+    const isEditing = !els.summaryText.hidden;
+    if (isEditing) {
+      state.summary = els.summaryText.value;
+      persistDraft();
+      els.summaryText.hidden = true;
+      els.summaryView.hidden = false;
+      els.summaryEditButton.textContent = "Modifier";
+      renderSummary();
+    } else {
+      els.summaryView.hidden = true;
+      els.summaryText.hidden = false;
+      els.summaryEditButton.textContent = "Valider";
+      els.summaryText.focus();
+    }
   });
 
   els.transcriptText.addEventListener("input", () => {
@@ -300,22 +323,37 @@ function startSpeechRecognition() {
 function spawnRecognition() {
   const recognition = new SpeechRecognition();
   recognition.continuous = true;
-  recognition.interimResults = false;
+  recognition.interimResults = true;
   recognition.lang = state.language;
   recognition.maxAlternatives = 1;
 
   recognition.onresult = (event) => {
-    const transcript = Array.from(event.results)
-      .slice(event.resultIndex)
-      .map((result) => result[0].transcript)
-      .join(" ");
-    state.transcript = state.transcript ? `${state.transcript}\n${transcript}` : transcript;
-    if (state.transcript.length > 30_000) {
-      state.transcript = state.transcript.slice(-30_000);
-      setStatus("Transcription tronquee (limite atteinte).");
+    let interim = "";
+    const newFinals = [];
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const r = event.results[i];
+      if (r.isFinal) {
+        const t = r[0].transcript.trim();
+        if (t) newFinals.push(t);
+      } else {
+        interim += r[0].transcript;
+      }
     }
-    persistDraft();
-    render();
+    if (newFinals.length) {
+      const added = newFinals.join(" ");
+      state.transcript = state.transcript ? `${state.transcript}\n${added}` : added;
+      if (state.transcript.length > 30_000) {
+        state.transcript = state.transcript.slice(-30_000);
+        setStatus("Transcription tronquee (limite atteinte).");
+      }
+      persistDraft();
+    }
+    if (els.liveText) {
+      const recent = state.transcript.split("\n").slice(-4).join("\n");
+      els.liveText.innerHTML = escapeHtml(recent) +
+        (interim ? `<span class="live-interim"> ${escapeHtml(interim)}</span>` : "");
+      els.livePanel.scrollTop = els.livePanel.scrollHeight;
+    }
   };
 
   recognition.onerror = (event) => {
@@ -324,6 +362,7 @@ function spawnRecognition() {
   };
 
   recognition.onend = async () => {
+    if (els.liveText && !state.isRecording) els.liveText.innerHTML = "";
     state.speechRecognition = null;
 
     // Silence ou pause — relancer tant que l'utilisateur n'a pas cliqué Stop
@@ -772,6 +811,10 @@ function render() {
   els.resultPanel.hidden = !hasResult;
   els.transcriptText.value = state.transcript;
   els.summaryText.value = state.summary;
+  if (els.summaryText.hidden) renderSummary();
+
+  els.livePanel.hidden = !(state.isRecording && state.useSpeechRecognition);
+  if (els.setupTip) els.setupTip.hidden = !!(state.geminiToken || state.hfToken);
 
   els.titleInput.value = state.title;
   els.languageSelect.value = state.language;
@@ -791,6 +834,51 @@ function render() {
   els.updateButton.hidden = !state.updateReady;
 
   renderHistory();
+}
+
+function renderSummary() {
+  if (!els.summaryView) return;
+  const text = (state.summary || "").trim();
+  if (!text) {
+    els.summaryView.innerHTML = `<p style="color:var(--muted);margin:0">Le compte-rendu apparaitra ici…</p>`;
+    return;
+  }
+  const lines = text.split("\n");
+  const sections = [];
+  let current = null;
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    const heading = t.match(/^(\d+[\).:])\s*(.+)/);
+    const bullet = t.match(/^[-*•]\s+(.+)/);
+    if (heading) {
+      if (current) sections.push(current);
+      current = { heading: `${heading[1]} ${heading[2]}`, items: [], extra: [] };
+    } else if (bullet && current) {
+      current.items.push(bullet[1]);
+    } else if (current) {
+      current.extra.push(t);
+    } else {
+      if (!sections.length || sections[sections.length - 1].heading !== null) {
+        sections.push({ heading: null, items: [], extra: [t] });
+      } else {
+        sections[sections.length - 1].extra.push(t);
+      }
+    }
+  }
+  if (current) sections.push(current);
+  if (!sections.length) {
+    els.summaryView.innerHTML = `<pre class="s-pre">${escapeHtml(text)}</pre>`;
+    return;
+  }
+  els.summaryView.innerHTML = sections.map((s) => {
+    const head = s.heading ? `<p class="s-heading">${escapeHtml(s.heading)}</p>` : "";
+    const list = s.items.length
+      ? `<ul class="s-list">${s.items.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>`
+      : "";
+    const extra = s.extra.map((p) => `<p class="s-plain">${escapeHtml(p)}</p>`).join("");
+    return `<div class="s-section">${head}${list}${extra}</div>`;
+  }).join("");
 }
 
 function renderTimer() {
