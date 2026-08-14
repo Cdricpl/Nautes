@@ -1,75 +1,58 @@
-# Nautes
+# Transcription audio
 
-Application web mobile installable pour prendre des notes de rendez-vous.
+Transcrit **mot à mot** un enregistrement audio, en local sur votre ordinateur.
+Aucune limite de minutes, aucun abonnement, aucune clé, aucun envoi sur internet.
 
-## Ce qui est pret
+Remplace la transcription de Word et son quota de 300 minutes par mois.
 
-- Accueil minimaliste avec un seul bouton : `Demarrer` / `Stop`.
-- Apres `Stop` : transcription puis compte-rendu IA automatiques.
-- Parametres separes : langue, modele, consentement, mode offline/cloud, export.
-- Historique local en memoire du telephone via `localStorage`.
-- PWA installable avec `manifest.webmanifest` et `sw.js`.
+## Installation (une seule fois)
 
-## Tester sur ordinateur
+1. Installer Python : ouvrir le **Microsoft Store**, chercher **Python 3.12**, installer.
+2. Double-cliquer sur **`Installer.bat`** et attendre la fin (quelques minutes).
 
-Servez le dossier en `https` ou en `localhost`. C'est necessaire pour le micro, l'installation PWA et le relais local Hugging Face qui evite les erreurs navigateur de type `Failed to fetch`.
-Exemple depuis VS Code :
+## Utilisation
 
-```bash
-node server.mjs
-```
+Double-cliquer sur **`Transcrire.bat`**, puis :
 
-Puis ouvrir :
+1. **Ajouter...** pour choisir un ou plusieurs enregistrements.
+2. Choisir la langue et la qualité.
+3. Cliquer **Transcrire**.
 
-```text
-http://localhost:8080
-```
+Le texte est écrit à côté du fichier d'origine : `reunion.mp3` produit `reunion.txt`.
 
-## Publier sur GitHub Pages
+Au tout premier lancement, le modèle de reconnaissance se télécharge automatiquement
+(environ 500 Mo pour *Rapide*). Ensuite tout fonctionne hors ligne, même sans connexion.
 
-L'application est déjà statique et prête à être servie comme page GitHub.
+## Formats acceptés
 
-1. Créez un dépôt GitHub pour ce dossier.
-2. Poussez les fichiers sur la branche `main`.
-3. Activez GitHub Pages en choisissant la branche `main` et le dossier racine (`/`).
-4. Ouvrez l'URL GitHub Pages depuis votre smartphone.
-5. Ajoutez la page à l'écran d'accueil pour un usage PWA.
+MP3, M4A, WAV, FLAC, OGG, OPUS, AAC, WMA, ainsi que les vidéos MP4, MOV, AVI et MKV
+(la piste audio est extraite automatiquement). Rien d'autre à installer.
 
-Si vous préférez un déploiement automatique, un workflow GitHub Actions est déjà fourni dans `.github/workflows/pages.yml`.
+## Qualité et durée de traitement
 
-Les notes sont stockées localement dans le navigateur / l'application mobile. La suppression des données du navigateur ou de l'application supprime aussi l'historique.
+| Qualité | Précision | 2 h d'audio sur un PC récent |
+| --- | --- | --- |
+| Rapide (small) | bonne, comparable à Word | 20 à 40 min |
+| Équilibré (medium) | meilleure que Word | 45 min à 1 h 30 |
+| Meilleure (large-v3) | la plus fidèle | 1 h 30 à 3 h |
 
-## API de résumé gratuite
+Avec une carte graphique NVIDIA, comptez 5 à 10 fois plus rapide : laissez l'option
+*Utiliser le GPU* cochée, l'application bascule seule sur le processeur si besoin.
 
-L'application peut utiliser un service de résumé réel via l'API Hugging Face si vous fournissez une clé d'API gratuite.
+Commencez par **Rapide**. Si le résultat ne vous satisfait pas, refaites le même fichier
+en **Équilibré**.
 
-1. Créez un compte gratuit sur https://huggingface.co/.
-2. Dans votre profil, générez un token d'API.
-3. Lancez le serveur local avec la variable d'environnement `HF_API_TOKEN` :
+## Options
 
-```bash
-HF_API_TOKEN=your_token_here node server.mjs
-```
+- **Fichier horodaté en plus** — un second `.txt` avec l'heure devant chaque phrase,
+  pratique pour retrouver un passage dans l'enregistrement.
+- **Sous-titres .srt** — fichier de sous-titres standard.
 
-Sur Windows PowerShell :
+Vous pouvez ajouter plusieurs fichiers d'un coup : ils sont traités à la suite.
+Le bouton **Annuler** interrompt le traitement à tout moment.
 
-```powershell
-$env:HF_API_TOKEN = 'your_token_here'
-node server.mjs
-```
+## Confidentialité
 
-Vous pouvez aussi saisir le token dans l'onglet Options de l'application. Si l'application tourne via `node server.mjs`, le serveur local relaie l'appel vers Hugging Face et evite les erreurs navigateur de type `Failed to fetch`.
-
-Si vous n'ajoutez pas de token, ou si Hugging Face refuse la requete, l'application continue de fonctionner avec un résumé local de secours.
-
-## Tester sur smartphone
-
-- Ouvrez l'URL publique GitHub Pages sur votre mobile.
-- Le micro, le PWA et les traductions fonctionnent sous HTTPS.
-- Ajoutez l'application à l'écran d'accueil pour un accès rapide.
-
-## A brancher plus tard
-
-- Remplacer `fakeTranscribe` dans `app.js` par un appel a `/api/transcribe`.
-- Remplacer `fakeSummarize` dans `app.js` par un appel a `/api/summarize`.
-- Remplacer `localStorage` par IndexedDB ou SQLite chiffre si les notes deviennent sensibles.
+Tout se passe sur votre machine. Les enregistrements ne quittent jamais l'ordinateur :
+aucun serveur, aucun compte, aucune donnée envoyée. Seul le modèle de reconnaissance est
+téléchargé, une seule fois, au premier lancement.
