@@ -18,6 +18,8 @@ Double-cliquer sur **`Transcrire.bat`**, puis :
 2. Choisir la langue et la qualité.
 3. Cliquer **Transcrire**.
 
+Le bouton **Mode sombre**, en haut à droite, bascule l'affichage.
+
 Le texte est écrit à côté du fichier d'origine : `reunion.mp3` produit `reunion.txt`.
 
 Au tout premier lancement, le modèle de reconnaissance se télécharge automatiquement
@@ -67,7 +69,19 @@ elle sait *quand la voix change*. Le numéro suit l'ordre d'apparition — la pr
 personne entendue devient **Interlocuteur 1**. Il suffit ensuite de remplacer les
 étiquettes par les vrais noms dans Word.
 
-Le nombre d'interlocuteurs est détecté automatiquement, sans avoir à l'indiquer.
+### Indiquez le nombre de personnes
+
+C'est le réglage le plus important de cette option. **Dites combien de personnes parlent**
+dans la liste déroulante prévue à cet effet.
+
+Sans cette information, le programme doit deviner, et il se trompe beaucoup : sur une
+conversation réelle de 10 minutes à 2 voix, la détection automatique produisait
+**16 interlocuteurs** au lieu de 2. Une même personne est recomptée dès que le micro
+bouge ou que le ton change.
+
+Avec le nombre exact, le découpage est fiable. Le choix *Je ne sais pas* reste possible
+et a été nettement amélioré (2 interlocuteurs trouvés sur le même test), mais il reste
+moins sûr qu'un nombre donné.
 
 Compter environ **8 minutes de calcul par heure d'audio**, en plus de la transcription.
 Deux petits modèles (37 Mo au total) se téléchargent au premier usage seulement.

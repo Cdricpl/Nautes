@@ -7,7 +7,7 @@ import threading
 import tkinter as tk
 import urllib.request
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font as tkfont, messagebox, ttk
 
 AUDIO_TYPES = [
     ("Fichiers audio et video", "*.mp3 *.m4a *.wav *.flac *.ogg *.opus *.aac *.wma *.mp4 *.mov *.avi *.mkv"),
@@ -23,10 +23,28 @@ DIARIZATION_EMBEDDING_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/"
     "3dspeaker_speech_campplus_sv_en_voxceleb_16k.onnx"
 )
-# Seuil de regroupement des voix. Mesure sur enregistrement reel : 0.5 retrouve le bon
-# nombre d'interlocuteurs la ou le comptage force (num_clusters) se trompe.
-DIARIZATION_THRESHOLD = 0.5
+# Seuil utilise seulement quand le nombre d'interlocuteurs n'est pas connu.
+# Mesure sur une conversation reelle de 10 min a 2 voix : ce mode fragmente une meme
+# personne en une quinzaine de voix. Indiquer le nombre exact est nettement plus fiable,
+# d'ou le choix de "2 personnes" par defaut.
+DIARIZATION_THRESHOLD = 0.7
+# Une voix qui totalise moins que ces deux seuils est consideree comme un artefact
+# et rendue a la voix voisine. Valeurs mesurees : plus severes (0.08 / 5 s), elles
+# fusionnaient deux personnes reelles en une seule.
+MARGINAL_SPEAKER_SHARE = 0.05
+MARGINAL_SPEAKER_SECONDS = 3.0
 SAMPLE_RATE = 16_000
+
+SPEAKER_COUNTS = {
+    "2 personnes": 2,
+    "3 personnes": 3,
+    "4 personnes": 4,
+    "5 personnes": 5,
+    "6 personnes": 6,
+    "8 personnes": 8,
+    "10 personnes": 10,
+    "Je ne sais pas": 0,
+}
 
 MODELS = {
     "Rapide (small)": "small",
@@ -190,7 +208,54 @@ def ensure_diarization_models(emit) -> tuple[Path, Path]:
     return segmentation, embedding
 
 
-def build_diarizer(segmentation: Path, embedding: Path):
+def merge_marginal_speakers(turns):
+    """Rend a la voix voisine les grappes trop petites pour etre une vraie personne.
+
+    Sans nombre d'interlocuteurs impose, le regroupement automatique eclate une meme
+    personne en de nombreuses voix des que le micro bouge ou que l'intonation change.
+    Les grappes qui ne representent qu'une part negligeable de la parole sont donc
+    reattribuees a la voix retenue la plus proche dans le temps.
+    """
+    if not turns:
+        return turns
+
+    totals: dict[int, float] = {}
+    for start, end, speaker in turns:
+        totals[speaker] = totals.get(speaker, 0.0) + max(0.0, end - start)
+
+    overall = sum(totals.values())
+    if overall <= 0:
+        return turns
+
+    kept = {
+        speaker
+        for speaker, spoken in totals.items()
+        if spoken >= MARGINAL_SPEAKER_SECONDS and spoken / overall >= MARGINAL_SPEAKER_SHARE
+    }
+    if not kept:
+        kept = {max(totals, key=totals.get)}
+    if len(kept) == len(totals):
+        return turns
+
+    cleaned = []
+    for start, end, speaker in turns:
+        if speaker in kept:
+            cleaned.append((start, end, speaker))
+            continue
+        nearest, smallest_gap = None, None
+        for other_start, other_end, other in turns:
+            if other not in kept:
+                continue
+            overlapping = other_start < end and start < other_end
+            gap = 0.0 if overlapping else min(abs(start - other_end), abs(other_start - end))
+            if smallest_gap is None or gap < smallest_gap:
+                nearest, smallest_gap = other, gap
+        cleaned.append((start, end, speaker if nearest is None else nearest))
+
+    return cleaned
+
+
+def build_diarizer(segmentation: Path, embedding: Path, expected_count: int):
     try:
         import sherpa_onnx
     except ImportError as error:
@@ -200,13 +265,18 @@ def build_diarizer(segmentation: Path, embedding: Path):
         ) from error
 
     threads = max(1, (os.cpu_count() or 4) - 1)
+    clustering = (
+        sherpa_onnx.FastClusteringConfig(num_clusters=expected_count)
+        if expected_count >= 2
+        else sherpa_onnx.FastClusteringConfig(num_clusters=-1, threshold=DIARIZATION_THRESHOLD)
+    )
     config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
         segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
             pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(segmentation)),
             num_threads=threads,
         ),
         embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding), num_threads=threads),
-        clustering=sherpa_onnx.FastClusteringConfig(num_clusters=-1, threshold=DIARIZATION_THRESHOLD),
+        clustering=clustering,
         min_duration_on=0.3,
         min_duration_off=0.5,
     )
@@ -271,7 +341,8 @@ class Transcriber(threading.Thread):
         total = len(self.files)
         self.emit("status", text=f"[{index}/{total}] Preparation de l'identification des interlocuteurs...")
         segmentation, embedding = ensure_diarization_models(self.emit)
-        diarizer = build_diarizer(segmentation, embedding)
+        expected = self.options["speaker_count"]
+        diarizer = build_diarizer(segmentation, embedding, expected)
 
         def report(processed, chunks):
             if self.cancelled.is_set():
@@ -289,6 +360,9 @@ class Transcriber(threading.Thread):
             return []
 
         turns = [(item.start, item.end, item.speaker) for item in result.sort_by_start_time()]
+        if expected < 2:
+            turns = merge_marginal_speakers(turns)
+
         count = len({speaker for _start, _end, speaker in turns})
         self.emit("status", text=f"[{index}/{total}] {count} interlocuteur(s) detecte(s).")
         self.emit("progress", value=0)
@@ -375,104 +449,342 @@ class Transcriber(threading.Thread):
         return written
 
 
+PALETTES = {
+    "light": {
+        "field": "#ffffff",
+        "ink": "#1b1b1b",
+        "muted": "#616161",
+        "line": "#e0e0e0",
+        "select": "#0f6cbd",
+        "select_ink": "#ffffff",
+        "accent_ink": "#0f6cbd",
+        "track": "#d8d8d8",
+    },
+    "dark": {
+        "field": "#2b2b2b",
+        "ink": "#f2f2f2",
+        "muted": "#a6a6a6",
+        "line": "#3d3d3d",
+        "select": "#4cc2ff",
+        "select_ink": "#1b1b1b",
+        "accent_ink": "#6fc9ff",
+        "track": "#3d3d3d",
+    },
+}
+
+
+class ProgressBar(tk.Canvas):
+    """Barre de progression dessinee a la main.
+
+    La barre ttk rend une gouttiere noire selon le theme installe ; celle-ci a
+    exactement le meme rendu partout, en clair comme en sombre.
+    """
+
+    THICKNESS = 8
+
+    def __init__(self, parent):
+        super().__init__(parent, height=self.THICKNESS, highlightthickness=0, borderwidth=0)
+        self.value = 0.0
+        self.colors = PALETTES["light"]
+        self.bind("<Configure>", lambda _event: self.redraw())
+
+    def set_palette(self, colors, background):
+        self.colors = colors
+        self.configure(background=background)
+        self.redraw()
+
+    def set_value(self, value):
+        self.value = max(0.0, min(100.0, float(value)))
+        self.redraw()
+
+    def capsule(self, right, color):
+        height = self.THICKNESS
+        radius = height / 2
+        right = max(right, height)
+        self.create_oval(0, 0, height, height, fill=color, outline=color)
+        self.create_oval(right - height, 0, right, height, fill=color, outline=color)
+        self.create_rectangle(radius, 0, right - radius, height, fill=color, outline=color)
+
+    def redraw(self):
+        self.delete("all")
+        width = self.winfo_width()
+        if width <= 1:
+            return
+        self.capsule(width, self.colors["track"])
+        if self.value > 0:
+            self.capsule(width * self.value / 100, self.colors["select"])
+
+
+def pick_font(size: int, weight: str = "normal"):
+    """Choisit la plus belle police disponible sur la machine."""
+    available = set(tkfont.families())
+    for family in ("Segoe UI Variable Text", "Segoe UI", "Inter", "Ubuntu", "DejaVu Sans"):
+        if family in available:
+            return (family, size, weight)
+    return ("TkDefaultFont", size, weight)
+
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Transcription audio")
-        self.geometry("760x600")
-        self.minsize(640, 520)
+        self.geometry("900x840")
+        self.minsize(820, 720)
 
         self.files: list[str] = []
         self.events: queue.Queue = queue.Queue()
         self.worker: Transcriber | None = None
+        self.theme = "light"
 
+        self.fonts = {
+            "title": pick_font(20, "bold"),
+            "subtitle": pick_font(10),
+            "section": pick_font(10, "bold"),
+            "body": pick_font(10),
+            "small": pick_font(9),
+            "mono": pick_font(10),
+            "status": pick_font(10),
+        }
+
+        self.apply_theme(self.theme)
         self.build_ui()
+        self.paint()
         self.after(100, self.drain_events)
 
+    # ── Apparence ────────────────────────────────────────────────────────────
+    def apply_theme(self, mode: str):
+        self.theme = mode
+        try:
+            import sv_ttk
+
+            sv_ttk.set_theme(mode)
+        except Exception:  # noqa: BLE001 - theme moderne absent, on garde un rendu correct
+            style = ttk.Style(self)
+            if "vista" in style.theme_names():
+                style.theme_use("vista")
+            elif "clam" in style.theme_names():
+                style.theme_use("clam")
+
+    def paint(self):
+        """Applique la palette aux widgets qui ne suivent pas le theme ttk."""
+        colors = PALETTES[self.theme]
+
+        for label in getattr(self, "muted_labels", []):
+            label.configure(foreground=colors["muted"], font=self.fonts["small"])
+
+        self.listbox_holder.configure(
+            background=colors["field"],
+            highlightbackground=colors["line"],
+            highlightcolor=colors["line"],
+        )
+        self.files_list.configure(
+            background=colors["field"],
+            foreground=colors["ink"],
+            selectbackground=colors["select"],
+            selectforeground=colors["select_ink"],
+            highlightbackground=colors["line"],
+            highlightcolor=colors["line"],
+            font=self.fonts["body"],
+        )
+        self.preview.configure(
+            background=colors["field"],
+            foreground=colors["ink"],
+            insertbackground=colors["ink"],
+            selectbackground=colors["select"],
+            selectforeground=colors["select_ink"],
+            highlightbackground=colors["line"],
+            highlightcolor=colors["line"],
+            font=self.fonts["mono"],
+        )
+        self.preview.tag_configure("speaker", foreground=colors["accent_ink"], font=self.fonts["section"])
+        self.status.configure(foreground=colors["muted"])
+        self.empty_hint.configure(foreground=colors["muted"])
+        self.progress.set_palette(colors, ttk.Style(self).lookup("TFrame", "background") or colors["field"])
+
+    def toggle_theme(self):
+        self.apply_theme("dark" if self.theme == "light" else "light")
+        self.theme_button.configure(text="Mode sombre" if self.theme == "light" else "Mode clair")
+        self.paint()
+
+    # ── Construction ─────────────────────────────────────────────────────────
     def build_ui(self):
-        padding = {"padx": 14, "pady": 6}
+        self.muted_labels: list[ttk.Label] = []
 
-        header = ttk.Frame(self)
-        header.pack(fill="x", **padding)
-        ttk.Label(header, text="Transcription audio", font=("Segoe UI", 16, "bold")).pack(anchor="w")
-        ttk.Label(
-            header,
-            text="Transcription mot a mot, en local sur votre ordinateur. Aucune limite de duree.",
-            foreground="#555555",
-        ).pack(anchor="w")
+        root = ttk.Frame(self, padding=(24, 20, 24, 20))
+        root.pack(fill="both", expand=True)
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(4, weight=1)
 
-        files_frame = ttk.LabelFrame(self, text="Fichiers a transcrire")
-        files_frame.pack(fill="both", expand=False, **padding)
+        self.build_header(root)
+        self.build_files_card(root)
+        self.build_options_card(root)
+        self.build_action_bar(root)
+        self.build_preview_card(root)
 
-        self.files_list = tk.Listbox(files_frame, height=5, activestyle="none")
-        self.files_list.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+    def muted(self, parent, text, **grid):
+        label = ttk.Label(parent, text=text)
+        self.muted_labels.append(label)
+        if grid:
+            label.grid(**grid)
+        return label
 
-        buttons = ttk.Frame(files_frame)
-        buttons.pack(side="right", fill="y", padx=8, pady=8)
-        ttk.Button(buttons, text="Ajouter...", command=self.add_files).pack(fill="x", pady=2)
-        ttk.Button(buttons, text="Retirer", command=self.remove_selected).pack(fill="x", pady=2)
-        ttk.Button(buttons, text="Vider", command=self.clear_files).pack(fill="x", pady=2)
+    def build_header(self, root):
+        header = ttk.Frame(root)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 18))
+        header.columnconfigure(0, weight=1)
 
-        options = ttk.LabelFrame(self, text="Options")
-        options.pack(fill="x", **padding)
-        options.columnconfigure(1, weight=1)
-        options.columnconfigure(3, weight=1)
+        titles = ttk.Frame(header)
+        titles.grid(row=0, column=0, sticky="w")
+        ttk.Label(titles, text="Transcription audio", font=self.fonts["title"]).pack(anchor="w")
+        self.muted(titles, "Mot a mot, en local sur votre ordinateur. Aucune limite de duree.").pack(
+            anchor="w", pady=(2, 0)
+        )
 
-        ttk.Label(options, text="Langue").grid(row=0, column=0, sticky="w", padx=8, pady=6)
-        self.language = ttk.Combobox(options, values=list(LANGUAGES), state="readonly")
+        self.theme_button = ttk.Button(header, text="Mode sombre", width=13, command=self.toggle_theme)
+        self.theme_button.grid(row=0, column=1, sticky="e")
+
+    def card(self, root, row, title, weight=0):
+        holder = ttk.Frame(root)
+        holder.grid(row=row, column=0, sticky="nsew", pady=(0, 14))
+        holder.columnconfigure(0, weight=1)
+        if weight:
+            holder.rowconfigure(1, weight=1)
+
+        ttk.Label(holder, text=title, font=self.fonts["section"]).grid(
+            row=0, column=0, sticky="w", pady=(0, 8)
+        )
+        body = ttk.Frame(holder, style="Card.TFrame", padding=16)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        return body
+
+    def build_files_card(self, root):
+        body = self.card(root, 1, "Fichiers a transcrire")
+        body.columnconfigure(0, weight=1)
+
+        listbox_holder = tk.Frame(body, highlightthickness=1, bd=0)
+        listbox_holder.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        self.files_list = tk.Listbox(
+            listbox_holder, height=3, activestyle="none", borderwidth=0, highlightthickness=0
+        )
+        self.files_list.pack(fill="both", expand=True, padx=10, pady=8)
+        self.listbox_holder = listbox_holder
+
+        self.empty_hint = ttk.Label(body, text="Aucun fichier pour l'instant.")
+        self.empty_hint.grid(row=1, column=0, sticky="w", pady=(8, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=0, column=1, sticky="n")
+        ttk.Button(buttons, text="Ajouter...", width=14, command=self.add_files).pack(fill="x", pady=(0, 6))
+        ttk.Button(buttons, text="Retirer", width=14, command=self.remove_selected).pack(fill="x", pady=(0, 6))
+        ttk.Button(buttons, text="Vider", width=14, command=self.clear_files).pack(fill="x")
+
+    def build_options_card(self, root):
+        body = self.card(root, 2, "Options")
+        body.columnconfigure(1, weight=1)
+        body.columnconfigure(3, weight=1)
+
+        ttk.Label(body, text="Langue").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=(0, 12))
+        self.language = ttk.Combobox(body, values=list(LANGUAGES), state="readonly")
         self.language.current(0)
-        self.language.grid(row=0, column=1, sticky="ew", padx=8, pady=6)
+        self.language.grid(row=0, column=1, sticky="ew", padx=(0, 24), pady=(0, 12))
 
-        ttk.Label(options, text="Qualite").grid(row=0, column=2, sticky="w", padx=8, pady=6)
-        self.model = ttk.Combobox(options, values=list(MODELS), state="readonly")
+        ttk.Label(body, text="Qualite").grid(row=0, column=2, sticky="w", padx=(0, 10), pady=(0, 12))
+        self.model = ttk.Combobox(body, values=list(MODELS), state="readonly")
         self.model.current(0)
-        self.model.grid(row=0, column=3, sticky="ew", padx=8, pady=6)
+        self.model.grid(row=0, column=3, sticky="ew", pady=(0, 12))
 
         self.with_timestamps = tk.BooleanVar(value=False)
         self.with_srt = tk.BooleanVar(value=False)
         self.use_gpu = tk.BooleanVar(value=True)
         self.with_speakers = tk.BooleanVar(value=False)
 
-        ttk.Checkbutton(options, text="Fichier horodate en plus", variable=self.with_timestamps).grid(
-            row=1, column=0, columnspan=2, sticky="w", padx=8, pady=2
+        extras = ttk.Frame(body)
+        extras.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 6))
+        ttk.Checkbutton(extras, text="Fichier horodate en plus", variable=self.with_timestamps).pack(
+            side="left", padx=(0, 24)
         )
-        ttk.Checkbutton(options, text="Sous-titres .srt", variable=self.with_srt).grid(
-            row=1, column=2, columnspan=2, sticky="w", padx=8, pady=2
+        ttk.Checkbutton(extras, text="Sous-titres .srt", variable=self.with_srt).pack(side="left", padx=(0, 24))
+        ttk.Checkbutton(extras, text="Utiliser le GPU NVIDIA si disponible", variable=self.use_gpu).pack(
+            side="left"
         )
+
+        ttk.Separator(body, orient="horizontal").grid(row=2, column=0, columnspan=4, sticky="ew", pady=14)
+
         ttk.Checkbutton(
-            options,
-            text="Identifier les interlocuteurs (Interlocuteur 1, Interlocuteur 2, ...)",
+            body,
+            text="Identifier les interlocuteurs",
             variable=self.with_speakers,
-        ).grid(row=2, column=0, columnspan=4, sticky="w", padx=8, pady=2)
-        ttk.Label(
-            options,
-            text="Ajoute environ 8 min de calcul par heure d'audio. Telechargement de 37 Mo au premier usage.",
-            foreground="#555555",
-        ).grid(row=3, column=0, columnspan=4, sticky="w", padx=28, pady=(0, 2))
-        ttk.Checkbutton(options, text="Utiliser le GPU NVIDIA s'il est disponible", variable=self.use_gpu).grid(
-            row=4, column=0, columnspan=4, sticky="w", padx=8, pady=(2, 8)
+            command=self.refresh_speaker_row,
+        ).grid(row=3, column=0, columnspan=4, sticky="w")
+        self.muted(
+            body,
+            "Decoupe le texte par personne : « Interlocuteur 1 : ... ». "
+            "Ajoute environ 8 min de calcul par heure d'audio.",
+            row=4,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            padx=(26, 0),
+            pady=(2, 10),
         )
 
-        actions = ttk.Frame(self)
-        actions.pack(fill="x", **padding)
-        self.start_button = ttk.Button(actions, text="Transcrire", command=self.start)
-        self.start_button.pack(side="left")
-        self.cancel_button = ttk.Button(actions, text="Annuler", command=self.cancel, state="disabled")
-        self.cancel_button.pack(side="left", padx=8)
+        self.speaker_row = ttk.Frame(body)
+        self.speaker_row.grid(row=5, column=0, columnspan=4, sticky="ew", padx=(26, 0))
+        ttk.Label(self.speaker_row, text="Combien de personnes parlent ?").pack(side="left", padx=(0, 10))
+        self.speaker_count = ttk.Combobox(
+            self.speaker_row, values=list(SPEAKER_COUNTS), state="readonly", width=18
+        )
+        self.speaker_count.current(0)
+        self.speaker_count.pack(side="left")
+        self.muted(
+            body,
+            "Donner le nombre exact change tout : sans lui, une meme personne est souvent "
+            "comptee plusieurs fois.",
+            row=6,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            padx=(26, 0),
+            pady=(6, 0),
+        )
+        self.refresh_speaker_row()
 
-        self.progress = ttk.Progressbar(self, mode="determinate", maximum=100)
-        self.progress.pack(fill="x", **padding)
+    def refresh_speaker_row(self):
+        state = "normal" if self.with_speakers.get() else "disabled"
+        self.speaker_count.configure(state="readonly" if self.with_speakers.get() else "disabled")
+        for child in self.speaker_row.winfo_children():
+            if isinstance(child, ttk.Label):
+                child.configure(state=state)
 
-        self.status = ttk.Label(self, text="Ajoutez un fichier pour commencer.", foreground="#555555")
-        self.status.pack(fill="x", padx=14)
+    def build_action_bar(self, root):
+        bar = ttk.Frame(root)
+        bar.grid(row=3, column=0, sticky="ew", pady=(0, 14))
+        bar.columnconfigure(2, weight=1)
 
-        preview_frame = ttk.LabelFrame(self, text="Apercu")
-        preview_frame.pack(fill="both", expand=True, **padding)
-        self.preview = tk.Text(preview_frame, wrap="word", height=10, state="disabled")
-        scrollbar = ttk.Scrollbar(preview_frame, command=self.preview.yview)
+        self.start_button = ttk.Button(bar, text="Transcrire", style="Accent.TButton", command=self.start)
+        self.start_button.grid(row=0, column=0, ipadx=14, ipady=2)
+        self.cancel_button = ttk.Button(bar, text="Annuler", command=self.cancel, state="disabled")
+        self.cancel_button.grid(row=0, column=1, padx=10)
+
+        self.progress = ProgressBar(bar)
+        self.progress.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(14, 6))
+
+        self.status = ttk.Label(bar, text="Ajoutez un fichier pour commencer.", font=self.fonts["status"])
+        self.status.grid(row=2, column=0, columnspan=3, sticky="w")
+
+    def build_preview_card(self, root):
+        body = self.card(root, 4, "Apercu", weight=1)
+        body.rowconfigure(0, weight=1)
+
+        self.preview = tk.Text(
+            body, wrap="word", height=6, state="disabled", borderwidth=0, highlightthickness=0,
+            padx=12, pady=10, spacing1=2, spacing3=4,
+        )
+        scrollbar = ttk.Scrollbar(body, command=self.preview.yview)
         self.preview.configure(yscrollcommand=scrollbar.set)
-        self.preview.pack(side="left", fill="both", expand=True, padx=(8, 0), pady=8)
-        scrollbar.pack(side="right", fill="y", padx=(0, 8), pady=8)
+        self.preview.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
 
     def add_files(self):
         chosen = filedialog.askopenfilenames(title="Choisir les enregistrements", filetypes=AUDIO_TYPES)
@@ -494,11 +806,17 @@ class App(tk.Tk):
         self.refresh_status()
 
     def refresh_status(self):
+        count = len(self.files)
+        if count:
+            self.empty_hint.grid_remove()
+        else:
+            self.empty_hint.grid()
         if self.worker and self.worker.is_alive():
             return
-        count = len(self.files)
         self.status.configure(
-            text="Ajoutez un fichier pour commencer." if not count else f"{count} fichier(s) pret(s)."
+            text="Ajoutez un fichier pour commencer."
+            if not count
+            else f"{count} fichier(s) pret(s). Cliquez sur Transcrire."
         )
 
     def start(self):
@@ -513,12 +831,13 @@ class App(tk.Tk):
             "with_srt": self.with_srt.get(),
             "use_gpu": self.use_gpu.get(),
             "with_speakers": self.with_speakers.get(),
+            "speaker_count": SPEAKER_COUNTS[self.speaker_count.get()],
         }
 
         self.preview.configure(state="normal")
         self.preview.delete("1.0", "end")
         self.preview.configure(state="disabled")
-        self.progress.configure(value=0)
+        self.progress.set_value(0)
         self.start_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
 
@@ -553,19 +872,19 @@ class App(tk.Tk):
             if kind == "status":
                 self.status.configure(text=event["text"])
             elif kind == "progress":
-                self.progress.configure(value=event["value"])
+                self.progress.set_value(event["value"])
             elif kind == "line":
                 self.append_preview(event["text"])
             elif kind == "done":
-                self.progress.configure(value=100)
+                self.progress.set_value(100)
                 names = "\n".join(str(path) for path in event["outputs"])
                 self.finish("Transcription terminee.")
                 messagebox.showinfo("Transcription terminee", f"Fichiers ecrits :\n\n{names}")
             elif kind == "cancelled":
-                self.progress.configure(value=0)
+                self.progress.set_value(0)
                 self.finish("Transcription annulee.")
             elif kind == "failed":
-                self.progress.configure(value=0)
+                self.progress.set_value(0)
                 self.finish("Echec de la transcription.")
                 messagebox.showerror("Erreur", event["message"])
 
