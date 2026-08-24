@@ -2,8 +2,10 @@
 
 import os
 import queue
+import sys
 import tarfile
 import threading
+import time
 import tkinter as tk
 import urllib.request
 from pathlib import Path
@@ -34,6 +36,11 @@ DIARIZATION_THRESHOLD = 0.7
 MARGINAL_SPEAKER_SHARE = 0.05
 MARGINAL_SPEAKER_SECONDS = 3.0
 SAMPLE_RATE = 16_000
+# L'interface ne se rafraichit qu'a cet intervalle : sur un fichier de 2 h, un
+# rafraichissement par segment sature la fenetre et Windows la declare "Ne repond pas".
+UI_REFRESH_SECONDS = 0.3
+# L'apercu ne garde que la fin du texte, sinon son cout de rendu croit sans limite.
+PREVIEW_MAX_LINES = 250
 
 SPEAKER_COUNTS = {
     "2 personnes": 2,
@@ -66,6 +73,14 @@ LANGUAGES = {
 def format_clock(seconds: float) -> str:
     total = int(seconds)
     return f"{total // 3600:02d}:{total % 3600 // 60:02d}:{total % 60:02d}"
+
+
+def format_duration(seconds: float) -> str:
+    minutes = max(1, int(round(seconds / 60)))
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} h {minutes:02d}"
 
 
 def format_srt_time(seconds: float) -> str:
@@ -300,7 +315,25 @@ class Transcriber(threading.Thread):
     def emit(self, kind, **payload):
         self.events.put({"kind": kind, **payload})
 
+    def lower_priority(self):
+        """Laisse la fenetre passer devant le calcul.
+
+        Sans cela, les threads de transcription monopolisent le processeur et Windows
+        finit par afficher "Ne repond pas" alors que le travail avance normalement.
+        """
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            below_normal = -1
+            kernel32.SetThreadPriority(kernel32.GetCurrentThread(), below_normal)
+        except Exception:  # noqa: BLE001 - priorite non reglable, sans consequence
+            pass
+
     def run(self):
+        self.lower_priority()
         try:
             model = self.load_model()
         except Exception as error:  # noqa: BLE001 - remonte tel quel a l'interface
@@ -397,22 +430,47 @@ class Transcriber(threading.Thread):
 
         duration = info.duration or 0
         collected = []
+        started = time.monotonic()
+        last_refresh = 0.0
 
-        for segment in segments:
-            if self.cancelled.is_set():
-                return []
-            text = segment.text.strip()
-            if text:
-                collected.append((segment.start, segment.end, text))
-            if duration:
-                self.emit("progress", value=min(100, segment.end / duration * 100))
-            self.emit(
-                "status",
-                text=f"[{index}/{total}] {path.name} — {format_clock(segment.end)} / {format_clock(duration)}",
-            )
-            self.emit("line", text=text)
+        # Sur un fichier de 2 h, le calcul dure des heures : le texte est ecrit au fur
+        # et a mesure pour qu'une coupure n'efface jamais le travail deja fait.
+        rescue = path.with_name(f"{path.stem}_en_cours.txt")
+        handle = rescue.open("w", encoding="utf-8")
 
-        return self.write_outputs(path, assign_speakers(collected, turns))
+        try:
+            for segment in segments:
+                if self.cancelled.is_set():
+                    return []
+                text = segment.text.strip()
+                if text:
+                    collected.append((segment.start, segment.end, text))
+                    handle.write(text + "\n")
+                    handle.flush()
+                    self.emit("line", text=text)
+
+                now = time.monotonic()
+                if now - last_refresh >= UI_REFRESH_SECONDS:
+                    last_refresh = now
+                    if duration:
+                        self.emit("progress", value=min(100, segment.end / duration * 100))
+                    self.emit(
+                        "status",
+                        text=self.progress_text(index, total, path, segment.end, duration, now - started),
+                    )
+        finally:
+            handle.close()
+
+        written = self.write_outputs(path, assign_speakers(collected, turns))
+        rescue.unlink(missing_ok=True)
+        return written
+
+    def progress_text(self, index, total, path: Path, position, duration, elapsed):
+        line = f"[{index}/{total}] {path.name} — {format_clock(position)} / {format_clock(duration)}"
+        if duration and position > 60 and elapsed > 20:
+            remaining = elapsed * (duration - position) / position
+            line += f"  ·  encore ~{format_duration(remaining)}"
+        return line
 
     def write_outputs(self, path: Path, collected):
         written = []
@@ -851,7 +909,12 @@ class App(tk.Tk):
 
     def append_preview(self, text):
         self.preview.configure(state="normal")
-        self.preview.insert("end", text + " ")
+        # Une ligne par segment : tout coller sur une seule ligne obligeait Tk a
+        # recalculer la coupure des mots d'un texte de plus en plus long a chaque ajout.
+        self.preview.insert("end", text + "\n")
+        excess = int(self.preview.index("end-1c").split(".")[0]) - PREVIEW_MAX_LINES
+        if excess > 0:
+            self.preview.delete("1.0", f"{excess + 1}.0")
         self.preview.see("end")
         self.preview.configure(state="disabled")
 

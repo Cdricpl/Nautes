@@ -45,6 +45,24 @@ Avec une carte graphique NVIDIA, comptez 5 à 10 fois plus rapide : laissez l'op
 Commencez par **Rapide**. Si le résultat ne vous satisfait pas, refaites le même fichier
 en **Équilibré**.
 
+## Fichiers longs (1 h et plus)
+
+Sur un enregistrement de 2 h en *Meilleure qualité* sans carte graphique, le calcul dure
+plusieurs heures. Pendant ce temps :
+
+- **Windows peut afficher « Ne répond pas »** dans la barre de titre. Ce n'est pas un
+  plantage : la fenêtre est simplement occupée. Le calcul continue.
+- Pour vérifier que ça avance, ouvrez le dossier de votre enregistrement : un fichier
+  **`nom_en_cours.txt`** s'y remplit au fil de la transcription. S'il grossit, tout va bien.
+- Ce fichier sert aussi de filet de sécurité : en cas de coupure de courant ou de
+  fermeture accidentelle, le texte déjà transcrit est conservé. Il est supprimé
+  automatiquement une fois le fichier final écrit.
+- Le temps restant estimé s'affiche sous la barre de progression après une minute.
+
+**Conseil** : pour un fichier de plus de 2 h sans carte graphique NVIDIA, préférez
+**Équilibré** à *Meilleure qualité*. Vous passez de plusieurs heures à environ une heure
+et demie, pour une différence de qualité faible sur un enregistrement correct.
+
 ## Options
 
 - **Fichier horodaté en plus** — un second `.txt` avec l'heure devant chaque phrase,
