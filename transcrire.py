@@ -377,15 +377,24 @@ class Transcriber(threading.Thread):
         expected = self.options["speaker_count"]
         diarizer = build_diarizer(segmentation, embedding, expected)
 
+        started = time.monotonic()
+        last_refresh = 0.0
+
         def report(processed, chunks):
+            nonlocal last_refresh
             if self.cancelled.is_set():
                 return 1
-            if chunks:
+            # Meme precaution que pour la transcription : sur un fichier de 2 h, cette
+            # fonction est appelee des milliers de fois et noierait la fenetre.
+            now = time.monotonic()
+            if chunks and now - last_refresh >= UI_REFRESH_SECONDS:
+                last_refresh = now
                 self.emit("progress", value=processed / chunks * 100)
-                self.emit(
-                    "status",
-                    text=f"[{index}/{total}] Identification des interlocuteurs : {processed * 100 // chunks} %",
-                )
+                line = f"[{index}/{total}] Identification des interlocuteurs : {processed * 100 // chunks} %"
+                if processed > 20 and now - started > 20:
+                    remaining = (now - started) * (chunks - processed) / processed
+                    line += f"  ·  encore ~{format_duration(remaining)}"
+                self.emit("status", text=line)
             return 0
 
         result = diarizer.process(audio, callback=report)
