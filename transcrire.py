@@ -963,5 +963,37 @@ class App(tk.Tk):
         self.after(100, self.drain_events)
 
 
+def verifier_installation() -> int:
+    """Controle que l'executable embarque bien tous ses composants.
+
+    Appele par la chaine de compilation : un executable auquel il manque une
+    bibliotheque native ne se plante qu'au moment de transcrire, c'est-a-dire
+    trop tard. Le rapport est ecrit dans un fichier car l'application est
+    compilee sans console.
+    """
+    rapport = Path(sys.executable).with_name("verification.txt")
+    try:
+        import av  # noqa: F401 - lecture des fichiers audio
+        import ctranslate2  # noqa: F401 - moteur de transcription
+        import faster_whisper  # noqa: F401
+        import onnxruntime  # noqa: F401 - detection des voix
+        import sherpa_onnx  # noqa: F401
+        import sv_ttk  # noqa: F401 - theme de l'interface
+
+        fenetre = tk.Tk()
+        fenetre.withdraw()
+        fenetre.destroy()
+    except Exception:  # noqa: BLE001 - le detail part dans le rapport
+        import traceback
+
+        rapport.write_text(traceback.format_exc(), encoding="utf-8")
+        return 1
+
+    rapport.write_text("Tous les composants sont presents.\n", encoding="utf-8")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--verifier" in sys.argv:
+        raise SystemExit(verifier_installation())
     App().mainloop()

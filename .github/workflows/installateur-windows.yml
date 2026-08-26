@@ -1,0 +1,73 @@
+name: Installateur Windows
+
+on:
+  push:
+    branches: [claude/fix-app-issues-LQVw5]
+    paths-ignore:
+      - "README.md"
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  construire:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer les composants
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Construire l'executable
+        run: pyinstaller --noconfirm --clean installeur/transcription.spec
+
+      - name: Verifier que l'executable est complet
+        shell: pwsh
+        run: |
+          $exe = ".\dist\TranscriptionAudio\TranscriptionAudio.exe"
+          $p = Start-Process -FilePath $exe -ArgumentList "--verifier" -Wait -PassThru
+          $rapport = ".\dist\TranscriptionAudio\verification.txt"
+          if (Test-Path $rapport) { Get-Content $rapport }
+          if ($p.ExitCode -ne 0) {
+            Write-Error "Il manque un composant dans l'executable."
+            exit 1
+          }
+
+      - name: Construire l'installateur
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installeur\transcription.iss
+
+      - name: Mesurer le resultat
+        shell: pwsh
+        run: |
+          Get-ChildItem installeur\Output\*.exe |
+            ForEach-Object { "{0} — {1:N0} Mo" -f $_.Name, ($_.Length / 1MB) }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TranscriptionAudio-Installateur
+          path: installeur/Output/*.exe
+
+      - name: Publier le telechargement
+        if: github.ref_name == 'claude/fix-app-issues-LQVw5'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Une etiquette fixe : le lien de telechargement ne change jamais.
+          gh release delete derniere-version --yes --cleanup-tag 2>$null
+          gh release create derniere-version (Get-Item installeur\Output\*.exe).FullName `
+            --title "Transcription audio — derniere version" `
+            --notes "Telechargez le fichier .exe ci-dessous, puis double-cliquez dessus pour installer."
