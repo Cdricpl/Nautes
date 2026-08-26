@@ -963,15 +963,21 @@ class App(tk.Tk):
         self.after(100, self.drain_events)
 
 
-def verifier_installation() -> int:
+def verifier_installation(audio: str | None = None) -> int:
     """Controle que l'executable embarque bien tous ses composants.
 
     Appele par la chaine de compilation : un executable auquel il manque une
     bibliotheque native ne se plante qu'au moment de transcrire, c'est-a-dire
     trop tard. Le rapport est ecrit dans un fichier car l'application est
     compilee sans console.
+
+    Avec un fichier audio en argument, une vraie transcription est effectuee.
+    Charger les modules ne suffit pas : cela ne prouve pas que le decodage
+    audio, la detection de parole et le moteur de calcul fonctionnent une fois
+    figes dans l'executable.
     """
     rapport = Path(sys.executable).with_name("verification.txt")
+    lignes = []
     try:
         import av  # noqa: F401 - lecture des fichiers audio
         import ctranslate2  # noqa: F401 - moteur de transcription
@@ -980,20 +986,38 @@ def verifier_installation() -> int:
         import sherpa_onnx  # noqa: F401
         import sv_ttk  # noqa: F401 - theme de l'interface
 
+        lignes.append("Composants charges.")
+
         fenetre = tk.Tk()
         fenetre.withdraw()
         fenetre.destroy()
+        lignes.append("Interface graphique operationnelle.")
+
+        if audio:
+            from faster_whisper import WhisperModel
+
+            modele = WhisperModel("tiny", device="cpu", compute_type="int8")
+            segments, info = modele.transcribe(audio, language="fr", vad_filter=True)
+            mots = " ".join(segment.text.strip() for segment in segments)
+            lignes.append(f"Transcription de test reussie ({info.duration:.1f} s d'audio).")
+            lignes.append(f"Texte obtenu : {mots!r}")
+
+            diarizeur = build_diarizer(*ensure_diarization_models(lambda *a, **k: None), 2)
+            lignes.append(f"Identification des voix operationnelle ({diarizeur.sample_rate} Hz).")
     except Exception:  # noqa: BLE001 - le detail part dans le rapport
         import traceback
 
-        rapport.write_text(traceback.format_exc(), encoding="utf-8")
+        lignes.append(traceback.format_exc())
+        rapport.write_text("\n".join(lignes), encoding="utf-8")
         return 1
 
-    rapport.write_text("Tous les composants sont presents.\n", encoding="utf-8")
+    rapport.write_text("\n".join(lignes) + "\n", encoding="utf-8")
     return 0
 
 
 if __name__ == "__main__":
     if "--verifier" in sys.argv:
-        raise SystemExit(verifier_installation())
+        position = sys.argv.index("--verifier")
+        fichier = sys.argv[position + 1] if len(sys.argv) > position + 1 else None
+        raise SystemExit(verifier_installation(fichier))
     App().mainloop()

@@ -31,15 +31,32 @@ jobs:
       - name: Construire l'executable
         run: pyinstaller --noconfirm --clean installeur/transcription.spec
 
-      - name: Verifier que l'executable est complet
+      - name: Fabriquer un court echantillon audio
+        shell: pwsh
+        run: |
+          python -c @"
+          import math, struct, wave
+          with wave.open('echantillon.wav', 'w') as f:
+              f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+              # Trois secondes de son module : de quoi faire travailler le decodage
+              # audio, la detection de parole et le moteur de calcul.
+              cadres = [int(12000 * math.sin(i / 8.0) * (0.5 + 0.5 * math.sin(i / 900.0)))
+                        for i in range(48000)]
+              f.writeframes(b''.join(struct.pack('<h', c) for c in cadres))
+          "@
+
+      - name: Verifier que l'executable transcrit vraiment
         shell: pwsh
         run: |
           $exe = ".\dist\TranscriptionAudio\TranscriptionAudio.exe"
-          $p = Start-Process -FilePath $exe -ArgumentList "--verifier" -Wait -PassThru
+          $audio = (Get-Item echantillon.wav).FullName
+          # Une vraie transcription : charger les modules ne prouve pas que le
+          # moteur fonctionne une fois fige dans l'executable.
+          $p = Start-Process -FilePath $exe -ArgumentList "--verifier", $audio -Wait -PassThru
           $rapport = ".\dist\TranscriptionAudio\verification.txt"
-          if (Test-Path $rapport) { Get-Content $rapport }
+          if (Test-Path $rapport) { Get-Content $rapport } else { Write-Warning "Aucun rapport produit." }
           if ($p.ExitCode -ne 0) {
-            Write-Error "Il manque un composant dans l'executable."
+            Write-Error "L'executable ne parvient pas a transcrire."
             exit 1
           }
 
