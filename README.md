@@ -7,12 +7,24 @@ Remplace la transcription de Word et son quota de 300 minutes par mois.
 
 ## Installation (une seule fois)
 
-1. Installer Python : ouvrir le **Microsoft Store**, chercher **Python 3.12**, installer.
-2. Double-cliquer sur **`Installer.bat`** et attendre la fin (quelques minutes).
+1. Télécharger l'installateur :
+   **[TranscriptionAudio-Installateur.exe](https://github.com/Cdricpl/Nautes/releases/latest)**
+2. Double-cliquer dessus et suivre les trois écrans.
+
+C'est tout. Pas de Python à installer, pas de dossier à décompresser. Le programme
+apparaît ensuite dans le menu Démarrer, et se désinstalle comme n'importe quel autre
+logiciel depuis *Paramètres → Applications*.
+
+L'installation ne demande pas de mot de passe administrateur : elle se fait dans votre
+compte utilisateur.
+
+> Windows peut afficher un bandeau bleu **« Windows a protégé votre ordinateur »**.
+> Cliquer sur **Informations complémentaires**, puis sur **Exécuter quand même**.
+> C'est le comportement normal pour un programme sans certificat de signature payant.
 
 ## Utilisation
 
-Double-cliquer sur **`Transcrire.bat`**, puis :
+Lancer **Transcription audio** depuis le menu Démarrer, puis :
 
 1. **Ajouter...** pour choisir un ou plusieurs enregistrements.
 2. Choisir la langue et la qualité.
@@ -118,3 +130,17 @@ Le bouton **Annuler** interrompt le traitement à tout moment.
 Tout se passe sur votre machine. Les enregistrements ne quittent jamais l'ordinateur :
 aucun serveur, aucun compte, aucune donnée envoyée. Seul le modèle de reconnaissance est
 téléchargé, une seule fois, au premier lancement.
+
+## Pour les développeurs
+
+Lancer depuis les sources, sans installateur :
+
+```
+pip install -r requirements.txt
+python transcrire.py
+```
+
+L'installateur Windows est construit automatiquement par GitHub à chaque envoi sur la
+branche de développement (`.github/workflows/installateur-windows.yml`). La compilation
+ne peut pas se faire sur une machine Linux : PyInstaller produit un exécutable pour le
+système sur lequel il tourne.
