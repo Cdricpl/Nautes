@@ -4,6 +4,7 @@ import os
 import queue
 import sys
 import tarfile
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -167,6 +168,43 @@ def assign_speakers(segments, turns):
         assigned.append((start, end, text, None if best_speaker is None else order[best_speaker]))
 
     return assigned
+
+
+def dossier_accessible(dossier: Path) -> bool:
+    try:
+        temoin = dossier / f".ecriture_{os.getpid()}.tmp"
+        with temoin.open("w", encoding="utf-8"):
+            pass
+        temoin.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def dossier_de_sortie(source: Path) -> Path:
+    """Choisit un dossier ou l'ecriture est reellement possible.
+
+    Les enregistrements lus depuis un telephone connecte, un partage reseau, un
+    CD ou un dossier synchronise sont souvent en lecture seule : le texte ne peut
+    alors pas etre depose a cote du fichier d'origine.
+    """
+    if dossier_accessible(source.parent):
+        return source.parent
+
+    replis = [
+        Path.home() / "Documents" / "Transcriptions",
+        Path.home() / "Transcriptions",
+        Path(tempfile.gettempdir()) / "Transcriptions",
+    ]
+    for repli in replis:
+        try:
+            repli.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        if dossier_accessible(repli):
+            return repli
+
+    return Path(tempfile.gettempdir())
 
 
 def models_dir() -> Path:
@@ -415,6 +453,12 @@ class Transcriber(threading.Thread):
         self.emit("status", text=f"[{index}/{total}] Analyse de {path.name}...")
         self.emit("progress", value=0)
 
+        # Verifie tout de suite ou le texte pourra etre ecrit : decouvrir un dossier
+        # en lecture seule apres deux heures de calcul serait desastreux.
+        sortie = dossier_de_sortie(path)
+        if sortie != path.parent:
+            self.emit("deplace", dossier=str(sortie), fichier=path.name)
+
         source = str(path)
         turns = []
 
@@ -444,8 +488,13 @@ class Transcriber(threading.Thread):
 
         # Sur un fichier de 2 h, le calcul dure des heures : le texte est ecrit au fur
         # et a mesure pour qu'une coupure n'efface jamais le travail deja fait.
-        rescue = path.with_name(f"{path.stem}_en_cours.txt")
-        handle = rescue.open("w", encoding="utf-8")
+        rescue = sortie / f"{path.stem}_en_cours.txt"
+        try:
+            handle = rescue.open("w", encoding="utf-8")
+        except OSError:
+            # Le filet de securite est un confort : son absence ne doit jamais
+            # empecher la transcription elle-meme.
+            handle = None
 
         try:
             for segment in segments:
@@ -454,8 +503,9 @@ class Transcriber(threading.Thread):
                 text = segment.text.strip()
                 if text:
                     collected.append((segment.start, segment.end, text))
-                    handle.write(text + "\n")
-                    handle.flush()
+                    if handle is not None:
+                        handle.write(text + "\n")
+                        handle.flush()
                     self.emit("line", text=text)
 
                 now = time.monotonic()
@@ -468,9 +518,10 @@ class Transcriber(threading.Thread):
                         text=self.progress_text(index, total, path, segment.end, duration, now - started),
                     )
         finally:
-            handle.close()
+            if handle is not None:
+                handle.close()
 
-        written = self.write_outputs(path, assign_speakers(collected, turns))
+        written = self.write_outputs(path, sortie, assign_speakers(collected, turns))
         rescue.unlink(missing_ok=True)
         return written
 
@@ -481,7 +532,7 @@ class Transcriber(threading.Thread):
             line += f"  ·  encore ~{format_duration(remaining)}"
         return line
 
-    def write_outputs(self, path: Path, collected):
+    def write_outputs(self, path: Path, sortie: Path, collected):
         written = []
         # Si la diarisation n'a rien trouve, on retombe sur la mise en forme sans locuteurs.
         with_speakers = any(speaker is not None for _start, _end, _text, speaker in collected)
@@ -489,7 +540,7 @@ class Transcriber(threading.Thread):
         def prefixed(text, speaker):
             return f"{speaker_label(speaker)} : {text}" if with_speakers else text
 
-        text_path = path.with_suffix(".txt")
+        text_path = sortie / f"{path.stem}.txt"
         body = build_speaker_paragraphs(collected) if with_speakers else build_paragraphs(collected)
         text_path.write_text(body + "\n", encoding="utf-8")
         written.append(text_path)
@@ -499,7 +550,7 @@ class Transcriber(threading.Thread):
                 f"[{format_clock(start)}] {prefixed(text, speaker)}"
                 for start, _end, text, speaker in collected
             )
-            stamped_path = path.with_name(f"{path.stem}_horodate.txt")
+            stamped_path = sortie / f"{path.stem}_horodate.txt"
             stamped_path.write_text(stamped + "\n", encoding="utf-8")
             written.append(stamped_path)
 
@@ -509,7 +560,7 @@ class Transcriber(threading.Thread):
                 f"{prefixed(text, speaker)}\n"
                 for position, (start, end, text, speaker) in enumerate(collected, start=1)
             ]
-            srt_path = path.with_suffix(".srt")
+            srt_path = sortie / f"{path.stem}.srt"
             srt_path.write_text("\n".join(blocks), encoding="utf-8")
             written.append(srt_path)
 
@@ -601,7 +652,8 @@ class App(tk.Tk):
         self.files: list[str] = []
         self.events: queue.Queue = queue.Queue()
         self.worker: Transcriber | None = None
-        self.theme = "light"
+        self.deplacements: list[tuple[str, str]] = []
+        self.theme = "dark"
 
         self.fonts = {
             "title": pick_font(20, "bold"),
@@ -668,9 +720,12 @@ class App(tk.Tk):
         self.empty_hint.configure(foreground=colors["muted"])
         self.progress.set_palette(colors, ttk.Style(self).lookup("TFrame", "background") or colors["field"])
 
+    def libelle_theme(self) -> str:
+        return "Mode sombre" if self.theme == "light" else "Mode clair"
+
     def toggle_theme(self):
         self.apply_theme("dark" if self.theme == "light" else "light")
-        self.theme_button.configure(text="Mode sombre" if self.theme == "light" else "Mode clair")
+        self.theme_button.configure(text=self.libelle_theme())
         self.paint()
 
     # ── Construction ─────────────────────────────────────────────────────────
@@ -707,7 +762,7 @@ class App(tk.Tk):
             anchor="w", pady=(2, 0)
         )
 
-        self.theme_button = ttk.Button(header, text="Mode sombre", width=13, command=self.toggle_theme)
+        self.theme_button = ttk.Button(header, text=self.libelle_theme(), width=13, command=self.toggle_theme)
         self.theme_button.grid(row=0, column=1, sticky="e")
 
     def card(self, root, row, title, weight=0):
@@ -905,6 +960,7 @@ class App(tk.Tk):
         self.preview.delete("1.0", "end")
         self.preview.configure(state="disabled")
         self.progress.set_value(0)
+        self.deplacements.clear()
         self.start_button.configure(state="disabled")
         self.cancel_button.configure(state="normal")
 
@@ -947,11 +1003,22 @@ class App(tk.Tk):
                 self.progress.set_value(event["value"])
             elif kind == "line":
                 self.append_preview(event["text"])
+            elif kind == "deplace":
+                self.deplacements.append((event["fichier"], event["dossier"]))
             elif kind == "done":
                 self.progress.set_value(100)
                 names = "\n".join(str(path) for path in event["outputs"])
+                message = f"Fichiers ecrits :\n\n{names}"
+                if self.deplacements:
+                    dossiers = sorted({dossier for _fichier, dossier in self.deplacements})
+                    message += (
+                        "\n\nLe dossier d'origine est en lecture seule (telephone connecte, "
+                        "partage reseau ou dossier synchronise).\nLe texte a donc ete range dans :\n"
+                        + "\n".join(dossiers)
+                    )
+                self.deplacements.clear()
                 self.finish("Transcription terminee.")
-                messagebox.showinfo("Transcription terminee", f"Fichiers ecrits :\n\n{names}")
+                messagebox.showinfo("Transcription terminee", message)
             elif kind == "cancelled":
                 self.progress.set_value(0)
                 self.finish("Transcription annulee.")
